@@ -844,29 +844,24 @@ const Products: React.FC = () => {
   return (
     <Container fluid className="py-4">
       <Row className="mb-4 align-items-center">
-        <Col>
-          <h4>Products</h4>
+        <Col md="auto" className="mb-2 mb-md-0">
+          <h4 className="mb-0">Products</h4>
         </Col>
-        
-        <Col xs="auto" className="d-flex gap-2">
+        <Col md className="d-flex flex-column flex-md-row flex-wrap gap-2 justify-content-md-end">
           <Button variant="primary" onClick={() => handleOpenProductForm()}>
             <>{FaPlus({ className: "me-1" })}</> Add Product
           </Button>
-          
           <Button variant="info" onClick={handleOpenCategoryModal}>
             <>{FaPlus({ className: "me-1" })}</> Manage Categories
           </Button>
-          
           <Button variant="success" onClick={() => setImportModalOpen(true)}>
             <>{FaFileExcel({ className: "me-1" })}</> Import Products
           </Button>
-          
           {selectedProductIds.length > 0 && (
             <>
               <Button variant="outline-primary" onClick={handleOpenPrintDialog}>
                 <>{FaPrint({ className: "me-1" })}</> Print Labels ({selectedProductIds.length})
               </Button>
-              
               <Button variant="outline-danger" onClick={handleOpenBulkDeleteDialog}>
                 <>{FaTrash({ className: "me-1" })}</> Delete Selected ({selectedProductIds.length})
               </Button>
@@ -876,16 +871,15 @@ const Products: React.FC = () => {
       </Row>
       
       <Card className="mb-4">
-        <Card.Header className="d-flex justify-content-between align-items-center">
+        <Card.Header className="d-flex justify-content-between align-items-center flex-wrap gap-2">
           <h6 className="mb-0">Filters</h6>
           <Button variant="link" className="p-0">
             <>{FaFilter({})}</>
           </Button>
         </Card.Header>
-        
         <Card.Body>
-          <Row className="g-3">
-            <Col xs={12} md={4}>
+          <Row className="g-3 flex-column flex-md-row">
+            <Col xs={12} md={6} lg={4}>
               <InputGroup>
                 <InputGroup.Text>
                   <>{FaSearch({})}</>
@@ -897,8 +891,6 @@ const Products: React.FC = () => {
                 />
               </InputGroup>
             </Col>
-            
-            
             <Col xs={12} sm={6} md={2}>
               <Button
                 variant={showLowStock ? "warning" : "outline-warning"}
@@ -915,7 +907,7 @@ const Products: React.FC = () => {
       <Card>
         <Card.Body className="p-0">
           <div className="table-responsive" style={{ maxHeight: '70vh', overflowY: 'auto' }}>
-            <Table hover className="mb-0">
+            <Table hover className="mb-0 align-middle">
               <thead className="sticky-top bg-white" style={{ zIndex: 10 }}>
                 <tr>
                   <th style={{ width: '50px' }}>
@@ -928,26 +920,25 @@ const Products: React.FC = () => {
                       onChange={toggleSelectAll}
                     />
                   </th>
-                  <th>Name</th>                  
-                  <th>Description</th>
+                  <th>Name</th>
+                  <th className="d-none d-md-table-cell">Description</th>
                   <th>Category</th>
                   <th>Sale price</th>
-                  <th>Cost price</th>
+                  <th className="d-none d-sm-table-cell">Cost price</th>
                   <th>Stock</th>
                   <th>Actions</th>
                 </tr>
               </thead>
-              
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan={7} className="text-center py-4">
+                    <td colSpan={8} className="text-center py-4">
                       <Spinner animation="border" />
                     </td>
                   </tr>
                 ) : products.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="text-center py-4">
+                    <td colSpan={8} className="text-center py-4">
                       No products found
                     </td>
                   </tr>
@@ -955,12 +946,8 @@ const Products: React.FC = () => {
                   products.map((product) => {
                     const isLowStock = (product.stockQuantity || 0) <= (product.reorderLevel || 0);
                     const isSelected = selectedProductIds.includes(product.id);
-                    
                     return (
-                      <tr 
-                        key={product.id}
-                        className={isSelected ? "table-primary" : ""}
-                      >
+                      <tr key={product.id} className={isSelected ? "table-primary" : ""}>
                         <td>
                           <Form.Check
                             type="checkbox"
@@ -968,37 +955,33 @@ const Products: React.FC = () => {
                             onChange={() => toggleProductSelection(product.id)}
                           />
                         </td>
-                        
-                        <td>{product.name}</td>                        
-                        <td>{product.description || 'No description'}</td>
+                        <td>{product.name}</td>
+                        <td className="d-none d-md-table-cell">{product.description || 'No description'}</td>
                         <td>{product.category?.name || ''}</td>
                         <td>Rs. {(product.price || 0).toFixed(2)}</td>
-                        <td>Rs. {(product.costPrice || 0).toFixed(2)}</td>
-
+                        <td className="d-none d-sm-table-cell">Rs. {(product.costPrice || 0).toFixed(2)}</td>
                         <td>
-                          <Badge 
-                            bg={isLowStock ? "danger" : "success"}
-                          >
+                          <Badge bg={isLowStock ? "danger" : "success"}>
                             {product.stockQuantity || 0} units
                           </Badge>
                         </td>
-                        
                         <td>
-                          <Button 
-                            variant="link" 
-                            className="p-1 me-1"
-                            onClick={() => handleOpenProductForm(product)}
-                          >
-                            <>{FaPencilAlt({})}</>
-                          </Button>
-                          
-                          <Button 
-                            variant="link" 
-                            className="p-1 text-danger"
-                            onClick={() => handleOpenDeleteDialog(product)}
-                          >
-                            <>{FaTrash({})}</>
-                          </Button>
+                          <div className="d-flex flex-row flex-wrap gap-1">
+                            <Button
+                              variant="link"
+                              className="p-1 me-1"
+                              onClick={() => handleOpenProductForm(product)}
+                            >
+                              <>{FaPencilAlt({})}</>
+                            </Button>
+                            <Button
+                              variant="link"
+                              className="p-1 text-danger"
+                              onClick={() => handleOpenDeleteDialog(product)}
+                            >
+                              <>{FaTrash({})}</>
+                            </Button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -1007,11 +990,10 @@ const Products: React.FC = () => {
               </tbody>
             </Table>
           </div>
-          
-          <div className="d-flex justify-content-between align-items-center p-3 flex-wrap">
-            <div className="d-flex align-items-center mb-2 mb-sm-0">
+          <div className="d-flex flex-column flex-md-row justify-content-between align-items-center p-3 gap-2">
+            <div className="d-flex align-items-center mb-2 mb-md-0">
               <span className="me-2">Rows per page:</span>
-              <Form.Select 
+              <Form.Select
                 style={{ width: '80px' }}
                 value={rowsPerPage.toString()}
                 onChange={handleChangeRowsPerPage}
@@ -1021,13 +1003,12 @@ const Products: React.FC = () => {
                 <option value="25">25</option>
               </Form.Select>
             </div>
-            
-            <div>
+            <div className="d-flex align-items-center flex-wrap gap-2">
               <span className="me-3">
                 {page * rowsPerPage + 1}-{Math.min((page + 1) * rowsPerPage, totalProducts)} of {totalProducts}
               </span>
-              <Pagination className="d-inline-flex mb-0">
-                <Pagination.Prev 
+              <Pagination className="d-inline-flex mb-0 flex-wrap">
+                <Pagination.Prev
                   onClick={() => setPage(Math.max(0, page - 1))}
                   disabled={page === 0}
                 />
@@ -1146,8 +1127,8 @@ const Products: React.FC = () => {
         </Modal.Footer>
       </Modal>
       
-      <Modal 
-        show={productFormOpen} 
+      <Modal
+        show={productFormOpen}
         onHide={handleCloseProductForm}
         size="lg"
       >
@@ -1157,10 +1138,9 @@ const Products: React.FC = () => {
               {selectedProduct ? 'Edit Product' : 'Add New Product'}
             </Modal.Title>
           </Modal.Header>
-          
           <Modal.Body>
-            <Row className="g-3">
-              <Col md={6}>
+            <Row className="g-3 flex-column flex-md-row">
+              <Col xs={12} md={6}>
                 <Form.Group className="mb-3">
                   <Form.Label>Product Name</Form.Label>
                   <Form.Control
@@ -1170,7 +1150,6 @@ const Products: React.FC = () => {
                     required
                   />
                 </Form.Group>
-                
                 <Form.Group className="mb-3">
                   <Form.Label>Description</Form.Label>
                   <Form.Control
@@ -1181,7 +1160,6 @@ const Products: React.FC = () => {
                     onChange={handleInputChange}
                   />
                 </Form.Group>
-                
                 <Form.Group className="mb-3">
                   <Form.Label>Barcode</Form.Label>
                   <Form.Control
@@ -1193,7 +1171,6 @@ const Products: React.FC = () => {
                     Leave empty to auto-generate a unique barcode
                   </Form.Text>
                 </Form.Group>
-                
                 <Form.Group className="mb-3">
                   <Form.Label>Category</Form.Label>
                   <Form.Select
@@ -1210,10 +1187,9 @@ const Products: React.FC = () => {
                   </Form.Select>
                 </Form.Group>
               </Col>
-              
-              <Col md={6}>
+              <Col xs={12} md={6}>
                 <Row>
-                  <Col>
+                  <Col xs={12} sm={6}>
                     <Form.Group className="mb-3">
                       <Form.Label>Price</Form.Label>
                       <InputGroup>
@@ -1230,7 +1206,7 @@ const Products: React.FC = () => {
                       </InputGroup>
                     </Form.Group>
                   </Col>
-                  <Col>
+                  <Col xs={12} sm={6}>
                     <Form.Group className="mb-3">
                       <Form.Label>Cost Price</Form.Label>
                       <InputGroup>
@@ -1247,9 +1223,8 @@ const Products: React.FC = () => {
                     </Form.Group>
                   </Col>
                 </Row>
-                
                 <Row>
-                  <Col>
+                  <Col xs={12} sm={6}>
                     <Form.Group className="mb-3">
                       <Form.Label>Stock Quantity</Form.Label>
                       <Form.Control
@@ -1262,7 +1237,7 @@ const Products: React.FC = () => {
                       />
                     </Form.Group>
                   </Col>
-                  <Col>
+                  <Col xs={12} sm={6}>
                     <Form.Group className="mb-3">
                       <Form.Label>Reorder Level</Form.Label>
                       <Form.Control
@@ -1278,7 +1253,6 @@ const Products: React.FC = () => {
               </Col>
             </Row>
           </Modal.Body>
-          
           <Modal.Footer>
             <Button variant="secondary" onClick={handleCloseProductForm}>
               Cancel
