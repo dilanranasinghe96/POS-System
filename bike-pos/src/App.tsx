@@ -13,8 +13,11 @@ import DeveloperUsers from './pages/DeveloperUsers';
 import Login from './pages/Login';
 import POS from './pages/POS';
 import Products from './pages/Products';
+import RepairJobs from './pages/RepairJobs';
 import Reports from './pages/Reports';
 import Sales from './pages/Sales';
+import ShopSettings from './pages/ShopSettings';
+import UserManagement from './pages/UserManagement';
 import Suppliers from './pages/Suppliers';
 
 // Define protected route component
@@ -102,6 +105,12 @@ function App() {
                   <Suppliers />
                 </ProtectedRoute>
               } />
+           
+              <Route path="repair-jobs" element={
+                <ProtectedRoute>
+                  <RepairJobs />
+                </ProtectedRoute>
+              } />
               <Route path="sales" element={
                 <ProtectedRoute>
                   <Sales />
@@ -110,6 +119,18 @@ function App() {
               <Route path="reports" element={
                 <ProtectedRoute>
                   <Reports />
+                </ProtectedRoute>
+              } />
+              
+              {/* Admin Routes */}
+              <Route path="admin/shop" element={
+                <ProtectedRoute role="admin">
+                  <ShopSettings />
+                </ProtectedRoute>
+              } />
+              <Route path="admin/users" element={
+                <ProtectedRoute role="admin">
+                  <UserManagement />
                 </ProtectedRoute>
               } />
             </Route>

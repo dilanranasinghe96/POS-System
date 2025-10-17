@@ -6,6 +6,12 @@ const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
 const shopRoutes = require('./routes/shops');
 const statsRoutes = require('./routes/stats');
+const repairRoutes = require('./routes/repairs');
+const repairJobRoutes = require('./routes/repairJobs');
+const categoryRoutes = require('./routes/categories');
+const salesRoutes = require('./routes/sales');
+const supplierRoutes = require('./routes/suppliers');
+const reportRoutes = require('./routes/reports');
 const productController = require('../controllers/productController');
 const { authenticate, authorize } = require('../middleware/auth');
 const multer = require('multer');
@@ -35,6 +41,12 @@ app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/shops', shopRoutes);
 app.use('/api/stats', statsRoutes);
+app.use('/api/repairs', repairRoutes);
+app.use('/api/repair-jobs', repairJobRoutes);
+app.use('/api/categories', categoryRoutes);
+app.use('/api/sales', salesRoutes);
+app.use('/api/suppliers', supplierRoutes);
+app.use('/api/reports', reportRoutes);
 
 // Set up multer for file uploads
 const storage = multer.diskStorage({

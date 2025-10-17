@@ -6,6 +6,8 @@ const Sale = require('./Sale');
 const SaleItem = require('./SaleItem');
 const Supplier = require('./Supplier');
 const User = require('./User');
+const Repair = require('./Repair');
+const RepairJob = require('./RepairJob');
 
 // No relationships needed for MongoDB as they're handled by refs in schema
 
@@ -16,5 +18,7 @@ module.exports = {
   Sale,
   SaleItem,
   Supplier,
-  User
+  User,
+  Repair,
+  RepairJob
 };

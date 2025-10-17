@@ -25,6 +25,45 @@ app.use(express.urlencoded({ extended: true }));
 // Serve static files from the uploads directory
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
+// Import additional middleware and controllers
+const { authenticate, authorize } = require('./middleware/auth');
+const productController = require('./controllers/productController');
+const multer = require('multer');
+const fs = require('fs');
+
+// Set up multer for file uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadDir = path.join(__dirname, 'uploads/products');
+    // Create directory if it doesn't exist
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1E9)}`;
+    const extension = path.extname(file.originalname);
+    cb(null, `product-${uniqueSuffix}${extension}`);
+  }
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = /jpeg|jpg|png|gif/;
+    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = allowedTypes.test(file.mimetype);
+    
+    if (extname && mimetype) {
+      return cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed!'));
+    }
+  }
+});
+
 // Import routes
 const authRoutes = require('./routes/auth');
 const productRoutes = require('./routes/products');
@@ -37,10 +76,26 @@ const userRoutes = require('./routes/users');
 const orderRoutes = require('./routes/orders');
 const shopRoutes = require('./routes/shops');
 const statsRoutes = require('./routes/stats'); // Add this line to import stats routes
+const servicesRoutes = require('./routes/services');
+const repairJobRoutes = require('./routes/repairJobs');
+
+
+// Additional product routes that were in app.js
+const productRouter = express.Router();
+productRouter.get('/refresh', authenticate, productController.refreshProducts);
+productRouter.get('/latest', authenticate, productController.getLatestProducts);
+productRouter.get('/barcode/:barcode', authenticate, productController.getProductByBarcode);
+productRouter.post('/', authenticate, authorize('admin', 'manager'), upload.single('image'), productController.createProduct);
+productRouter.get('/', authenticate, productController.getAllProducts);
+productRouter.post('/print-labels', authenticate, productController.generateLabels);
+productRouter.get('/:id', authenticate, productController.getProductById);
+productRouter.put('/:id', authenticate, authorize('admin', 'manager'), upload.single('image'), productController.updateProduct);
+productRouter.delete('/:id', authenticate, authorize('admin'), productController.deleteProduct);
+productRouter.patch('/:id/stock', authenticate, authorize('admin', 'manager'), productController.updateStock);
 
 // Use routes
 app.use('/api/auth', authRoutes);
-app.use('/api/products', productRoutes);
+app.use('/api/products', productRouter); // Use the enhanced product router
 app.use('/api/categories', categoryRoutes);
 app.use('/api/sales', salesRoutes);
 app.use('/api/reports', reportRoutes);
@@ -50,6 +105,8 @@ app.use('/api/users', userRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/shops', shopRoutes);
 app.use('/api/stats', statsRoutes); // Add this line to use stats routes
+app.use('/api/services', servicesRoutes);
+app.use('/api/repair-jobs', repairJobRoutes);
 
 // Root route
 app.get('/', (req, res) => {

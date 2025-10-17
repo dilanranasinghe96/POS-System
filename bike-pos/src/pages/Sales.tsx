@@ -27,7 +27,7 @@ import { salesApi } from '../services/api';
 interface SaleItem {
   id?: string;
   _id?: string;
-  product: {
+  product?: {
     _id: string;
     name: string;
     barcode?: string;
@@ -37,6 +37,7 @@ interface SaleItem {
   price: number;
   discount: number;
   subtotal?: number;
+  total?: number;
   unitPrice?: number;
   Product?: {
     id?: string;
@@ -44,11 +45,13 @@ interface SaleItem {
     barcode?: string;
   };
   isManual?: boolean;
+  isService?: boolean;
   name?: string;
+  returnedQuantity?: number;
 }
 
 interface Sale {
-  id: string;
+  id: string | number;
   _id?: string;
   invoiceNumber: string;
   date: string;
@@ -60,7 +63,7 @@ interface Sale {
   customerName: string | null;
   customerPhone: string | null;
   notes: string | null;
-  status: 'completed' | 'returned' | 'cancelled';
+  status: 'completed' | 'returned' | 'cancelled' | 'partially_returned';
   cashier?: {
     id: string;
     username: string;
@@ -71,6 +74,15 @@ interface Sale {
   };
   SaleItems?: SaleItem[];
   createdAt: string;
+  returnedAmount?: number;
+  returnHistory?: Array<{
+    itemId: string;
+    itemName: string;
+    returnQuantity: number;
+    returnAmount: number;
+    reason: string;
+    returnedAt: string;
+  }>;
 }
 
 interface ReceiptData {
@@ -116,6 +128,10 @@ const Sales: React.FC = () => {
   const [returnDialogOpen, setReturnDialogOpen] = useState(false);
   const [returnReason, setReturnReason] = useState('');
   const [processingReturn, setProcessingReturn] = useState(false);
+  
+  // Individual item return states
+  const [returnType, setReturnType] = useState<'full' | 'partial'>('full');
+  const [itemsToReturn, setItemsToReturn] = useState<{ [key: string]: number }>({});
 
   const [receiptDialogOpen, setReceiptDialogOpen] = useState(false);
   const [receiptUrl, setReceiptUrl] = useState('');
@@ -222,12 +238,24 @@ const Sales: React.FC = () => {
     if (!selectedSale) return;
 
     setReturnReason('');
+    setReturnType('full');
+    setItemsToReturn({});
     setReturnDialogOpen(true);
   };
 
   const handleCloseReturnDialog = () => {
     setReturnDialogOpen(false);
     setReturnReason('');
+    setReturnType('full');
+    setItemsToReturn({});
+  };
+
+  const handleItemReturnQuantityChange = (itemId: string, quantity: number, maxQuantity: number) => {
+    const validQuantity = Math.max(0, Math.min(quantity, maxQuantity));
+    setItemsToReturn(prev => ({
+      ...prev,
+      [itemId]: validQuantity
+    }));
   };
 
   const handleProcessReturn = async () => {
@@ -236,13 +264,61 @@ const Sales: React.FC = () => {
     try {
       setProcessingReturn(true);
 
-      // Use the updateStatus API with the correct structure
-      await salesApi.updateStatus(selectedSale.id, {
-        status: 'returned',
-        reason: returnReason,
-      });
+      if (returnType === 'full') {
+        // Full return - mark entire sale as returned
+        await salesApi.updateStatus(selectedSale.id, {
+          status: 'returned',
+          reason: returnReason,
+        });
+        setSuccessMessage('Sale returned successfully');
+      } else {
+        // Partial return - return specific items
+        const returnItems = Object.entries(itemsToReturn)
+          .filter(([_, quantity]) => quantity > 0)
+          .map(([itemId, quantity]) => ({
+            itemId,
+            quantity
+          }));
 
-      setSuccessMessage('Sale returned successfully');
+        if (returnItems.length === 0) {
+          setError('Please select at least one item to return');
+          setProcessingReturn(false);
+          return;
+        }
+
+        // Process each item return separately using the returnSingleItem API
+        let successCount = 0;
+        let failedCount = 0;
+
+        for (const item of returnItems) {
+          try {
+            const returnData = {
+              saleId: String(selectedSale.id),
+              itemId: item.itemId,
+              returnQuantity: item.quantity,
+              reason: returnReason
+            };
+            
+            console.log('Returning item:', returnData);
+            
+            await salesApi.returnSingleItem(returnData);
+            successCount++;
+          } catch (itemError) {
+            console.error(`Failed to return item ${item.itemId}:`, itemError);
+            failedCount++;
+          }
+        }
+
+        if (successCount > 0) {
+          setSuccessMessage(
+            `Successfully returned ${successCount} item(s)` + 
+            (failedCount > 0 ? `. ${failedCount} item(s) failed.` : '')
+          );
+        } else {
+          setError('Failed to return any items');
+        }
+      }
+
       handleCloseReturnDialog();
       handleCloseDetailDialog();
       fetchSales();
@@ -414,9 +490,15 @@ const Sales: React.FC = () => {
               <hr />
               <div>
                 <div class="summary-row">
-                  <span>Subtotal:</span>
+                  <span>Products Subtotal:</span>
                   <span>Rs. ${sale.subtotal.toFixed(2)}</span>
                 </div>
+                ${sale.SaleItems && sale.SaleItems.some(item => item.isService) ? `
+                  <div class="summary-row">
+                    <span>Services Subtotal:</span>
+                    <span>Rs. ${sale.SaleItems.filter(item => item.isService).reduce((sum, item) => sum + (item.total || 0), 0).toFixed(2)}</span>
+                  </div>
+                ` : ''}
                 ${totalDiscount > 0 ? `
                   <div class="summary-row">
                     <span>Discount:</span>
@@ -520,6 +602,8 @@ const Sales: React.FC = () => {
         return 'success';
       case 'returned':
         return 'warning';
+      case 'partially_returned':
+        return 'info';
       case 'cancelled':
         return 'danger';
       default:
@@ -613,7 +697,8 @@ const Sales: React.FC = () => {
                 >
                   <option value="">All Statuses</option>
                   <option value="completed">Completed</option>
-                  <option value="returned">Returned</option>
+                  <option value="partially_returned">Partially Returned</option>
+                  <option value="returned">Fully Returned</option>
                   <option value="cancelled">Cancelled</option>
                 </Form.Select>
               </Form.Group>
@@ -688,7 +773,7 @@ const Sales: React.FC = () => {
                       onClick={() => {
                         console.log('Row clicked with sale ID:', sale.id);
                         if (sale && sale.id) {
-                          handleOpenDetailDialog(sale.id);
+                          handleOpenDetailDialog(String(sale.id));
                         } else {
                           console.error('Sale ID is undefined');
                           setError('Cannot view details: Sale ID is undefined');
@@ -726,7 +811,20 @@ const Sales: React.FC = () => {
                         <small>{formatPaymentMethod(sale.paymentMethod)}</small>
                       </td>
                       <td className="px-3 py-2 text-end">
-                        <div className="fw-medium">Rs. {sale.total.toFixed(2)}</div>
+                        <div className="fw-medium">
+                          {sale.returnedAmount && sale.returnedAmount > 0 ? (
+                            <>
+                              <span className="text-success">Rs. {(sale.total - sale.returnedAmount).toFixed(2)}</span>
+                              <div>
+                                <small className="text-muted text-decoration-line-through">
+                                  Rs. {sale.total.toFixed(2)}
+                                </small>
+                              </div>
+                            </>
+                          ) : (
+                            <span>Rs. {sale.total.toFixed(2)}</span>
+                          )}
+                        </div>
                         <div className="d-sm-none">
                           <small className="text-muted">
                             {formatPaymentMethod(sale.paymentMethod)}
@@ -748,7 +846,7 @@ const Sales: React.FC = () => {
                           onClick={(e) => {
                             e.stopPropagation();
                             if (sale.id) {
-                              handlePrintReceipt(sale.id);
+                              handlePrintReceipt(String(sale.id));
                             }
                           }}
                           disabled={printingReceipt}
@@ -910,21 +1008,52 @@ const Sales: React.FC = () => {
                 </thead>
                 <tbody>
                   {selectedSale.SaleItems?.map((item, index) => {
-                    const isManualItem = item.isManual || (!item.product && !item.Product);
-                    const productName = isManualItem
-                      ? (item.name || 'Manual Item')
-                      : (item.product?.name || item.Product?.name || 'Unknown Product');
+                    const isManualItem = item.isManual || (!item.product && !item.Product && !item.isService);
+                    const isService = item.isService;
+                    let productName = '';
+                    let itemType = '';
+                    
+                    if (isService) {
+                      productName = item.name || 'Service';
+                      itemType = ' (Service)';
+                    } else if (isManualItem) {
+                      productName = item.name || 'Manual Item';
+                      itemType = ' (Manual)';
+                    } else {
+                      productName = item.product?.name || item.Product?.name || 'Unknown Product';
+                    }
+                    
                     const unitPrice = item.price || item.unitPrice || 0;
                     const itemDiscount = item.discount || 0;
                     const subtotal = item.subtotal || (unitPrice * item.quantity);
                     
+                    const returnedQty = item.returnedQuantity || 0;
+                    const effectiveQty = item.quantity - returnedQty;
+                    const effectiveSubtotal = effectiveQty > 0 
+                      ? (unitPrice * effectiveQty) - (itemDiscount * effectiveQty / item.quantity)
+                      : 0;
+                    
                     return (
-                      <tr key={item.id || item._id || index}>
-                        <td>{productName}</td>
-                        <td>{item.quantity}</td>
+                      <tr key={item.id || item._id || index} className={isService ? 'table-warning' : ''}>
+                        <td>
+                          {productName}{itemType}
+                          {returnedQty > 0 && (
+                            <div>
+                              <Badge bg="warning" className="mt-1">
+                                {returnedQty} returned
+                              </Badge>
+                            </div>
+                          )}
+                        </td>
+                        <td>
+                          {effectiveQty > 0 ? effectiveQty : <span className="text-muted">{item.quantity}</span>}
+                          {returnedQty > 0 && effectiveQty === 0 && (
+                            <small className="text-danger d-block">Fully Returned</small>
+                          )}
+                        </td>
                         <td>Rs. {unitPrice.toFixed(2)}</td>
                         <td>Rs. {itemDiscount.toFixed(2)}</td>
-                        <td>Rs. {(subtotal - itemDiscount).toFixed(2)}</td>
+                        <td>Rs. {effectiveSubtotal.toFixed(2)}</td>
                       </tr>
                     );
                   })}
@@ -934,9 +1063,15 @@ const Sales: React.FC = () => {
               <Row className="mt-3">
                 <Col md={6} className="ms-auto">
                   <div className="d-flex justify-content-between">
-                    <strong>Subtotal:</strong>
+                    <strong>Products Subtotal:</strong>
                     <span>Rs. {selectedSale.subtotal.toFixed(2)}</span>
                   </div>
+                  {selectedSale.SaleItems && selectedSale.SaleItems.some(item => item.isService) && (
+                    <div className="d-flex justify-content-between">
+                      <strong>Services Subtotal:</strong>
+                      <span>Rs. {selectedSale.SaleItems.filter(item => item.isService).reduce((sum, item) => sum + (item.total || 0), 0).toFixed(2)}</span>
+                    </div>
+                  )}
                   <div className="d-flex justify-content-between">
                     <strong>Discount:</strong>
                     <span>Rs. {selectedSale.discount.toFixed(2)}</span>
@@ -950,6 +1085,19 @@ const Sales: React.FC = () => {
                     <strong>Total:</strong>
                     <strong>Rs. {selectedSale.total.toFixed(2)}</strong>
                   </div>
+                  {selectedSale.returnedAmount && selectedSale.returnedAmount > 0 && (
+                    <>
+                      <div className="d-flex justify-content-between text-danger">
+                        <strong>Returned Amount:</strong>
+                        <strong>- Rs. {selectedSale.returnedAmount.toFixed(2)}</strong>
+                      </div>
+                      <hr />
+                      <div className="d-flex justify-content-between text-success">
+                        <strong>Net Total:</strong>
+                        <strong>Rs. {(selectedSale.total - selectedSale.returnedAmount).toFixed(2)}</strong>
+                      </div>
+                    </>
+                  )}
                 </Col>
               </Row>
             </div>
@@ -959,15 +1107,15 @@ const Sales: React.FC = () => {
           <Button variant="secondary" onClick={handleCloseDetailDialog}>
             Close
           </Button>
-          {selectedSale && selectedSale.status === 'completed' && (
+          {selectedSale && (selectedSale.status === 'completed' || selectedSale.status === 'partially_returned') && (
             <Button variant="warning" onClick={handleOpenReturnDialog}>
-              Process Return
+              {selectedSale.status === 'partially_returned' ? 'Process Additional Return' : 'Process Return'}
             </Button>
           )}
           {selectedSale && (
             <Button 
               variant="primary" 
-              onClick={() => handlePrintReceipt(selectedSale.id)}
+              onClick={() => handlePrintReceipt(String(selectedSale.id))}
               disabled={printingReceipt}
             >
               {printingReceipt ? <Spinner animation="border" size="sm" /> : 'Print Receipt'}
@@ -977,11 +1125,110 @@ const Sales: React.FC = () => {
       </Modal>
 
       {/* Return Dialog Modal */}
-      <Modal show={returnDialogOpen} onHide={handleCloseReturnDialog}>
+      <Modal show={returnDialogOpen} onHide={handleCloseReturnDialog} size="lg">
         <Modal.Header closeButton>
           <Modal.Title>Process Return</Modal.Title>
         </Modal.Header>
         <Modal.Body>
+          {/* Return Type Selector */}
+          <Form.Group className="mb-3">
+            <Form.Label>Return Type</Form.Label>
+            <div>
+              <Form.Check
+                type="radio"
+                id="return-full"
+                label="Full Return (Return entire sale)"
+                checked={returnType === 'full'}
+                onChange={() => setReturnType('full')}
+                inline
+              />
+              <Form.Check
+                type="radio"
+                id="return-partial"
+                label="Partial Return (Select items to return)"
+                checked={returnType === 'partial'}
+                onChange={() => setReturnType('partial')}
+                inline
+              />
+            </div>
+          </Form.Group>
+
+          {/* Item Selection for Partial Return */}
+          {returnType === 'partial' && selectedSale?.SaleItems && (
+            <div className="mb-3">
+              <Form.Label>Select Items to Return</Form.Label>
+              <Table size="sm" bordered hover>
+                <thead className="table-light">
+                  <tr>
+                    <th>Item</th>
+                    <th style={{ width: '120px' }} className="text-center">Original Qty</th>
+                    <th style={{ width: '120px' }} className="text-center">Returned Qty</th>
+                    <th style={{ width: '120px' }} className="text-center">Available</th>
+                    <th style={{ width: '150px' }} className="text-center">Return Now</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedSale.SaleItems.map((item, index) => {
+                    const itemId = item._id || item.id || `item-${index}`;
+                    const productName = item.Product?.name || item.product?.name || item.name || 'Unknown Item';
+                    const returnedQty = item.returnedQuantity || 0;
+                    const availableToReturn = item.quantity - returnedQty;
+                    const currentReturnQty = itemsToReturn[itemId] || 0;
+                    
+                    // Skip items that are fully returned
+                    if (availableToReturn <= 0) return null;
+                    
+                    return (
+                      <tr key={itemId}>
+                        <td>
+                          <strong>{productName}</strong>
+                        </td>
+                        <td className="text-center">{item.quantity}</td>
+                        <td className="text-center">
+                          {returnedQty > 0 ? (
+                            <Badge bg="warning">{returnedQty}</Badge>
+                          ) : (
+                            <span className="text-muted">-</span>
+                          )}
+                        </td>
+                        <td className="text-center">
+                          <Badge bg="info">{availableToReturn}</Badge>
+                        </td>
+                        <td>
+                          <Form.Control
+                            type="number"
+                            size="sm"
+                            min={0}
+                            max={availableToReturn}
+                            value={currentReturnQty}
+                            onChange={(e) => handleItemReturnQuantityChange(
+                              itemId,
+                              parseInt(e.target.value) || 0,
+                              availableToReturn
+                            )}
+                            className={currentReturnQty > 0 ? 'border-warning' : ''}
+                            placeholder={`Max: ${availableToReturn}`}
+                          />
+                          {currentReturnQty > availableToReturn && (
+                            <small className="text-danger d-block mt-1">
+                              Cannot exceed {availableToReturn}
+                            </small>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  }).filter(Boolean)}
+                </tbody>
+              </Table>
+              <div className="alert alert-info mb-0">
+                <small>
+                  <strong>Tip:</strong> Enter the quantity to return for each item. The maximum allowed is shown in the "Available" column.
+                </small>
+              </div>
+            </div>
+          )}
+
+          {/* Return Reason */}
           <Form.Group>
             <Form.Label>Return Reason</Form.Label>
             <Form.Control
@@ -990,6 +1237,7 @@ const Sales: React.FC = () => {
               value={returnReason}
               onChange={(e) => setReturnReason(e.target.value)}
               placeholder="Enter reason for return..."
+              required
             />
           </Form.Group>
         </Modal.Body>

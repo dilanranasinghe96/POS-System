@@ -80,9 +80,11 @@ interface Sale {
     product?: number;
     quantity: number; 
     price: number;
+    costPrice?: number; // Add costPrice for products
     discount?: number;
     isManual?: boolean; // Add flag for manual items
-    name?: string; // Add name for manual items
+    isService?: boolean; // Add flag for service items
+    name?: string; // Add name for manual items and services
   }>;
   subtotal: number;
   tax?: number;
@@ -104,7 +106,7 @@ export const authApi = {
     api.post('/auth/register', userData),
   
   getProfile: () => 
-    api.get('/auth/profile'),
+    api.get('/auth/me'),
 };
 
 // Products API
@@ -213,12 +215,22 @@ export const salesApi = {
   },
   
   create: (saleData: Sale) => {
-    // Improved handling of manual and product items
+    // Improved handling of manual, service, and product items
     const formattedData = {
       ...saleData,
       items: saleData.items.map(item => {
+        // Keep isService flag and name for service items
+        if (item.isService) {
+          return {
+            isService: true,
+            name: item.name || 'Service',
+            quantity: item.quantity,
+            price: item.price,
+            discount: item.discount || 0
+          };
+        }
         // Keep isManual flag and name for manual items
-        if (item.isManual) {
+        else if (item.isManual) {
           return {
             isManual: true,
             name: item.name || 'Manual Item',
@@ -232,6 +244,7 @@ export const salesApi = {
             product: item.productId || item.product,
             quantity: item.quantity,
             price: item.price,
+            costPrice: item.costPrice || 0,
             discount: item.discount || 0
           };
         }
@@ -252,8 +265,12 @@ export const salesApi = {
     }
     
     return api.patch(`/sales/${id}/status`, statusData)
+      .then(response => {
+        console.log('Update status response:', response.data);
+        return response;
+      })
       .catch(error => {
-        console.error('Error updating sale status:', error);
+        console.error('Update status error:', error);
         if (error.response) {
           if (error.response.status === 404) {
             throw new Error('Sale not found');
@@ -263,6 +280,31 @@ export const salesApi = {
           throw new Error(`Server error (${error.response.status}): ${error.response.data?.message || 'Unknown error'}`);
         }
         throw new Error(`Failed to update sale status: ${error.message}`);
+      });
+  },
+  
+  returnSingleItem: (returnData: {
+    saleId: string;
+    itemId: string;
+    returnQuantity: number;
+    reason?: string;
+  }) => {
+    if (!returnData.saleId || !returnData.itemId || !returnData.returnQuantity) {
+      return Promise.reject(new Error('Sale ID, item ID, and return quantity are required'));
+    }
+    
+    return api.post('/sales/return-item', returnData)
+      .catch(error => {
+        console.error('Error returning item:', error);
+        if (error.response) {
+          if (error.response.status === 404) {
+            throw new Error('Sale or item not found');
+          } else if (error.response.status === 400) {
+            throw new Error(error.response.data?.message || 'Invalid return data');
+          }
+          throw new Error(`Server error (${error.response.status}): ${error.response.data?.message || 'Unknown error'}`);
+        }
+        throw new Error(`Failed to return item: ${error.message}`);
       });
   },
 };
@@ -386,9 +428,184 @@ export const printApi = {
     })
 };
 
+// Repairs API - moved up for better recognition
+export const repairsApi = {
+  getAll: (params?: { 
+    page?: number; 
+    limit?: number; 
+    search?: string; 
+  }) => api.get('/repairs', { params }),
+  
+  getById: (id: string) => api.get(`/repairs/${id}`),
+  
+  create: (repairData: { 
+    title: string; 
+    description?: string; 
+    price: number; 
+  }) => api.post('/repairs', repairData),
+  
+  update: (id: string, repairData: { 
+    title?: string; 
+    description?: string; 
+    price?: number; 
+    isActive?: boolean; 
+  }) => api.put(`/repairs/${id}`, repairData),
+  
+  delete: (id: string) => api.delete(`/repairs/${id}`),
+};
+
+// Services API
+export const servicesApi = {
+  getAll: (params?: { 
+    page?: number; 
+    limit?: number; 
+    startDate?: string;
+    endDate?: string;
+    paymentMethod?: string;
+    status?: string;
+    search?: string;
+    shopId?: string;
+  }) => api.get('/services', { params }),
+  
+  getById: (id: string) => api.get(`/services/${id}`),
+  
+  create: (serviceData: { 
+    name: string; 
+    description?: string; 
+    price: number; 
+    quantity?: number;
+    discount?: number;
+    customerName?: string;
+    customerPhone?: string;
+    paymentMethod?: string;
+    notes?: string;
+  }) => api.post('/services', serviceData),
+  
+  updateStatus: (id: string, statusData: {
+    status: 'completed' | 'pending' | 'cancelled' | 'refunded';
+    reason?: string;
+  }) => api.patch(`/services/${id}/status`, statusData),
+  
+  getStats: (params?: {
+    startDate?: string;
+    endDate?: string;
+    shopId?: string;
+  }) => api.get('/services/stats', { params }),
+};
+
+// Repair Jobs API
+export const repairJobsApi = {
+  getAll: (params?: { 
+    page?: number; 
+    limit?: number; 
+    search?: string;
+    status?: string;
+    priority?: string;
+    startDate?: string;
+    endDate?: string;
+  }) => api.get('/repair-jobs', { params }),
+  
+  getById: (id: string) => api.get(`/repair-jobs/${id}`),
+  
+  create: (jobData: {
+    customer: {
+      name: string;
+      phone: string;
+      email?: string;
+    };
+    bike?: {
+      brand?: string;
+      model?: string;
+      year?: string;
+      color?: string;
+      serialNumber?: string;
+    };
+    description: string;
+    priority?: 'low' | 'medium' | 'high' | 'urgent';
+    estimatedCost?: number;
+    estimatedCompletionDate?: string;
+    deposit?: number;
+    assignedTo?: string;
+  }) => api.post('/repair-jobs', jobData),
+  
+  update: (id: string, updates: any) => api.put(`/repair-jobs/${id}`, updates),
+  
+  addPart: (id: string, partData: {
+    productId?: string;
+    name: string;
+    quantity: number;
+    unitPrice: number;
+  }) => api.post(`/repair-jobs/${id}/parts`, partData),
+  
+  addLabor: (id: string, laborData: {
+    description: string;
+    hours: number;
+    hourlyRate: number;
+  }) => api.post(`/repair-jobs/${id}/labor`, laborData),
+  
+  addService: (id: string, serviceData: {
+    repairId?: string;
+    name: string;
+    price: number;
+  }) => api.post(`/repair-jobs/${id}/services`, serviceData),
+  
+  addNote: (id: string, noteData: {
+    text: string;
+  }) => api.post(`/repair-jobs/${id}/notes`, noteData),
+  
+  convertToSale: (id: string, saleData?: {
+    paymentMethod?: string;
+  }) => api.post(`/repair-jobs/${id}/convert-to-sale`, saleData),
+  
+  delete: (id: string) => api.delete(`/repair-jobs/${id}`),
+  
+  getStats: (params?: {
+    startDate?: string;
+    endDate?: string;
+  }) => api.get('/repair-jobs/stats', { params }),
+};
+
+// Users API
+export const usersApi = {
+  getAll: (params?: {
+    shopId?: string;
+  }) => api.get('/users', { params }),
+  
+  getById: (id: string) => api.get(`/users/${id}`),
+  
+  create: (userData: {
+    name: string;
+    username: string;
+    email: string;
+    password: string;
+    role: 'admin' | 'manager' | 'cashier';
+    shopId?: string;
+    isActive?: boolean;
+  }) => api.post('/users', userData),
+  
+  update: (id: string, userData: {
+    name?: string;
+    username?: string;
+    email?: string;
+    password?: string;
+    role?: 'admin' | 'manager' | 'cashier';
+    shopId?: string;
+    isActive?: boolean;
+  }) => api.put(`/users/${id}`, userData),
+  
+  toggleStatus: (id: string) => api.patch(`/users/${id}/toggle-status`),
+  
+  delete: (id: string) => api.delete(`/users/${id}`)
+};
+
 // Stats API
 export const statsApi = {
   getDeveloperStats: () => api.get('/stats/developer'),
+  getShopStats: (params?: {
+    shopId?: string;
+    startDate?: string;
+    endDate?: string;
+  }) => api.get('/stats/shop', { params }),
 };
 
 // Helper function to check server connectivity

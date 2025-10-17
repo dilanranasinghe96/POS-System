@@ -56,7 +56,7 @@ const getAllProducts = async (req, res) => {
         ...productObj,
         id: productObj._id,
         stockQuantity: productObj.quantity,
-        costPrice: productObj.cost,
+        costPrice: productObj.cost || productObj.costPrice || 0,
         categoryId: productObj.category ? productObj.category._id : null,
         supplierId: productObj.supplier ? productObj.supplier._id : null
       };
@@ -126,11 +126,19 @@ const getProductByBarcode = async (req, res) => {
     
     // Transform for frontend field naming consistency
     const productData = product.toObject();
+    
+    // Log for debugging
+    console.log('Product fetched by barcode:', {
+      name: productData.name,
+      cost: productData.cost,
+      costPrice: productData.costPrice
+    });
+    
     return res.status(200).json({
       ...productData,
       id: productData._id,
       stockQuantity: productData.quantity,
-      costPrice: productData.cost,
+      costPrice: productData.cost || productData.costPrice || 0,
       categoryId: productData.category ? productData.category._id : null,
       supplierId: productData.supplier ? productData.supplier._id : null
     });

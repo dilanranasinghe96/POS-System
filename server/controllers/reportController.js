@@ -1,5 +1,6 @@
 const Sale = require('../models/Sale');
 const Product = require('../models/Product');  // Make sure this exists
+const Service = require('../models/Service');   // Add Service model
 const mongoose = require('mongoose');
 
 // Get sales summary report
@@ -28,14 +29,14 @@ const getSalesSummary = async (req, res) => {
       return res.status(400).json({ message: 'Shop ID is required' });
     }
 
-    // Base match condition with shop filter - ONLY include completed sales for revenue
+    // Base match condition with shop filter - Include completed and partially_returned sales for revenue
     const matchCondition = { 
       createdAt: { $gte: start, $lte: end },
-      status: { $eq: 'completed' }, // Only completed sales count toward revenue
+      status: { $in: ['completed', 'partially_returned'] }, // Include both completed and partially returned
       shopId: shopId
     };
 
-    // Aggregate sales by day
+    // Aggregate sales by day - calculate from items to account for returns
     const dailySalesAggregation = await Sale.aggregate([
       {
         $match: matchCondition
@@ -49,11 +50,45 @@ const getSalesSummary = async (req, res) => {
         }
       },
       {
+        $unwind: {
+          path: '$items',
+          preserveNullAndEmptyArrays: true
+        }
+      },
+      {
+        $addFields: {
+          // Calculate effective quantity and revenue per item
+          effectiveQuantity: {
+            $subtract: [
+              { $ifNull: ['$items.quantity', 0] },
+              { $ifNull: ['$items.returnedQuantity', 0] }
+            ]
+          }
+        }
+      },
+      {
+        $addFields: {
+          itemRevenue: {
+            $multiply: ['$items.price', '$effectiveQuantity']
+          }
+        }
+      },
+      {
         $group: {
-          _id: "$saleDate",
-          total: { $sum: "$total" },
+          _id: {
+            saleId: '$_id',
+            saleDate: '$saleDate'
+          },
+          totalRevenue: { $sum: '$itemRevenue' },
+          itemCount: { $sum: 1 }
+        }
+      },
+      {
+        $group: {
+          _id: '$_id.saleDate',
+          productRevenue: { $sum: '$totalRevenue' },
           salesCount: { $sum: 1 },
-          itemCount: { $sum: { $size: "$items" } }
+          itemCount: { $sum: '$itemCount' }
         }
       },
       {
@@ -63,42 +98,220 @@ const getSalesSummary = async (req, res) => {
         $project: {
           _id: 0,
           date: "$_id",
-          total: { $round: ["$total", 2] },
+          productRevenue: { $round: ["$productRevenue", 2] },
           salesCount: 1,
           itemCount: 1
         }
       }
     ]);
 
-    // Get total sales within period
+    // Get total sales within period - calculate from items for accuracy
     const totalStats = await Sale.aggregate([
       {
         $match: matchCondition
       },
       {
+        $unwind: {
+          path: '$items',
+          preserveNullAndEmptyArrays: true
+        }
+      },
+      {
+        $addFields: {
+          effectiveQuantity: {
+            $subtract: [
+              { $ifNull: ['$items.quantity', 0] },
+              { $ifNull: ['$items.returnedQuantity', 0] }
+            ]
+          }
+        }
+      },
+      {
+        $group: {
+          _id: '$_id',
+          subtotal: {
+            $sum: {
+              $multiply: ['$items.price', '$effectiveQuantity']
+            }
+          },
+          tax: { $first: '$tax' },
+          discount: { $first: '$discount' },
+          returnedAmount: { $first: { $ifNull: ['$returnedAmount', 0] } }
+        }
+      },
+      {
+        $addFields: {
+          total: {
+            $add: [
+              { $subtract: ['$subtotal', '$discount'] },
+              '$tax'
+            ]
+          }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: '$total' },
+          subtotal: { $sum: '$subtotal' },
+          tax: { $sum: '$tax' },
+          discount: { $sum: '$discount' },
+          returnedAmount: { $sum: '$returnedAmount' },
+          totalSales: { $sum: 1 },
+          totalItems: { $sum: 1 }
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          total: { $round: ['$total', 2] },
+          subtotal: { $round: ['$subtotal', 2] },
+          tax: { $round: ['$tax', 2] },
+          discount: { $round: ['$discount', 2] },
+          returnedAmount: { $round: ['$returnedAmount', 2] },
+          totalSales: 1,
+          totalItems: 1,
+          averageSale: { 
+            $round: [
+              { $divide: [
+                '$total', 
+                { $cond: [{ $eq: ['$totalSales', 0] }, 1, '$totalSales'] }
+              ] }, 
+              2
+            ] 
+          }
+        }
+      }
+    ]);
+
+    // Get total services within period
+    const serviceStats = await Service.aggregate([
+      {
+        $match: {
+          createdAt: { $gte: start, $lte: end },
+          status: 'completed',
+          shopId: shopId
+        }
+      },
+      {
         $group: {
           _id: null,
           total: { $sum: "$total" },
-          subtotal: { $sum: "$subtotal" },
-          tax: { $sum: "$tax" },
           discount: { $sum: "$discount" },
-          totalSales: { $sum: 1 },
-          totalItems: { $sum: { $size: "$items" } }
+          totalServices: { $sum: 1 },
+          totalQuantity: { $sum: "$quantity" }
         }
       },
       {
         $project: {
           _id: 0,
           total: { $round: ["$total", 2] },
-          subtotal: { $round: ["$subtotal", 2] },
-          tax: { $round: ["$tax", 2] },
           discount: { $round: ["$discount", 2] },
-          totalSales: 1,
-          totalItems: 1,
-          averageSale: { $round: [{ $divide: ["$total", { $cond: [{ $eq: ["$totalSales", 0] }, 1, "$totalSales"] }] }, 2] }
+          totalServices: 1,
+          totalQuantity: 1,
+          averageService: { $round: [{ $divide: ["$total", { $cond: [{ $eq: ["$totalServices", 0] }, 1, "$totalServices"] }] }, 2] }
         }
       }
     ]);
+
+    // Aggregate services by day
+    const dailyServicesAggregation = await Service.aggregate([
+      {
+        $match: {
+          createdAt: { $gte: start, $lte: end },
+          status: 'completed',
+          shopId: shopId
+        }
+      },
+      {
+        $addFields: {
+          saleDate: { 
+            $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } 
+          }
+        }
+      },
+      {
+        $group: {
+          _id: "$saleDate",
+          total: { $sum: "$total" },
+          servicesCount: { $sum: 1 },
+          serviceQuantity: { $sum: "$quantity" }
+        }
+      },
+      {
+        $sort: { _id: 1 }
+      },
+      {
+        $project: {
+          _id: 0,
+          date: "$_id",
+          total: { $round: ["$total", 2] },
+          servicesCount: 1,
+          serviceQuantity: 1
+        }
+      }
+    ]);
+
+    // Combine daily sales and services data
+    const combinedDaily = {};
+    
+    // Add sales data
+    dailySalesAggregation.forEach(day => {
+      combinedDaily[day.date] = {
+        date: day.date,
+        productRevenue: day.productRevenue,  // Use the correct productRevenue field
+        serviceRevenue: 0,
+        totalRevenue: day.productRevenue,    // Start with just product revenue
+        salesCount: day.salesCount,
+        servicesCount: 0,
+        itemCount: day.itemCount,
+        serviceQuantity: 0
+      };
+    });
+
+    // Add services data
+    dailyServicesAggregation.forEach(day => {
+      if (combinedDaily[day.date]) {
+        combinedDaily[day.date].serviceRevenue = day.total;
+        combinedDaily[day.date].totalRevenue = combinedDaily[day.date].productRevenue + day.total;
+        combinedDaily[day.date].servicesCount = day.servicesCount;
+        combinedDaily[day.date].serviceQuantity = day.serviceQuantity;
+      } else {
+        combinedDaily[day.date] = {
+          date: day.date,
+          productRevenue: 0,
+          serviceRevenue: day.total,
+          totalRevenue: day.total,
+          salesCount: 0,
+          servicesCount: day.servicesCount,
+          itemCount: 0,
+          serviceQuantity: day.serviceQuantity
+        };
+      }
+    });
+
+    // Convert to array and sort
+    const combinedDailyArray = Object.values(combinedDaily).sort((a, b) => a.date.localeCompare(b.date));
+
+    // Combine totals
+    const salesTotals = totalStats[0] || { total: 0, subtotal: 0, tax: 0, discount: 0, totalSales: 0, totalItems: 0, averageSale: 0 };
+    const servicesTotals = serviceStats[0] || { total: 0, discount: 0, totalServices: 0, totalQuantity: 0, averageService: 0 };
+
+    const combinedTotals = {
+      productRevenue: salesTotals.subtotal,  // Use subtotal for products only
+      serviceRevenue: servicesTotals.total,
+      totalRevenue: salesTotals.subtotal + servicesTotals.total,
+      subtotal: salesTotals.subtotal,
+      tax: salesTotals.tax,
+      discount: salesTotals.discount + servicesTotals.discount,
+      totalSales: salesTotals.totalSales,
+      totalServices: servicesTotals.totalServices,
+      totalTransactions: salesTotals.totalSales + servicesTotals.totalServices,
+      totalItems: salesTotals.totalItems,
+      totalServiceQuantity: servicesTotals.totalQuantity,
+      averageSale: salesTotals.averageSale,
+      averageService: servicesTotals.averageService
+    };
     
     // Group by payment methods
     const paymentMethodStats = await Sale.aggregate([
@@ -106,9 +319,14 @@ const getSalesSummary = async (req, res) => {
         $match: matchCondition
       },
       {
+        $addFields: {
+          netTotal: { $subtract: ["$total", { $ifNull: ["$returnedAmount", 0] }] }
+        }
+      },
+      {
         $group: {
           _id: "$paymentMethod",
-          total: { $sum: "$total" },
+          total: { $sum: "$netTotal" },
           count: { $sum: 1 }
         }
       },
@@ -125,16 +343,8 @@ const getSalesSummary = async (req, res) => {
     res.status(200).json({
       startDate: start,
       endDate: end,
-      summary: dailySalesAggregation,
-      totals: totalStats.length > 0 ? totalStats[0] : {
-        total: 0,
-        subtotal: 0,
-        tax: 0,
-        discount: 0,
-        totalSales: 0,
-        totalItems: 0,
-        averageSale: 0
-      },
+      summary: combinedDailyArray,
+      totals: combinedTotals,
       paymentMethods: paymentMethodStats
     });
   } catch (error) {
@@ -169,14 +379,14 @@ const getDailySales = async (req, res) => {
       return res.status(400).json({ message: 'Shop ID is required' });
     }
 
-    // Base match condition with shop filter - only completed sales for revenue calculation
+    // Base match condition with shop filter - include completed and partially_returned sales
     const matchCondition = { 
       createdAt: { $gte: start, $lte: end },
-      status: { $eq: 'completed' }, // Only completed sales for revenue calculation
+      status: { $in: ['completed', 'partially_returned'] }, // Include both
       shopId: shopId
     };
 
-    // Aggregate daily sales
+    // Aggregate daily sales - calculate from items for accuracy
     const dailySales = await Sale.aggregate([
       {
         $match: matchCondition
@@ -187,11 +397,44 @@ const getDailySales = async (req, res) => {
         }
       },
       {
+        $unwind: {
+          path: '$items',
+          preserveNullAndEmptyArrays: true
+        }
+      },
+      {
+        $addFields: {
+          effectiveQuantity: {
+            $subtract: [
+              { $ifNull: ['$items.quantity', 0] },
+              { $ifNull: ['$items.returnedQuantity', 0] }
+            ]
+          }
+        }
+      },
+      {
+        $addFields: {
+          itemRevenue: {
+            $multiply: ['$items.price', '$effectiveQuantity']
+          }
+        }
+      },
+      {
         $group: {
-          _id: "$day",
-          revenue: { $sum: "$total" },
+          _id: {
+            saleId: '$_id',
+            day: '$day'
+          },
+          revenue: { $sum: '$itemRevenue' },
+          items: { $sum: 1 }
+        }
+      },
+      {
+        $group: {
+          _id: '$_id.day',
+          revenue: { $sum: '$revenue' },
           transactions: { $sum: 1 },
-          items: { $sum: { $size: "$items" } }
+          items: { $sum: '$items' }
         }
       },
       {
@@ -240,10 +483,10 @@ const getProductSalesReport = async (req, res) => {
       return res.status(400).json({ message: 'Shop ID is required' });
     }
 
-    // Base match condition with shop filter - only completed sales
+    // Base match condition with shop filter - include completed and partially_returned sales
     const matchCondition = { 
       createdAt: { $gte: start, $lte: end },
-      status: { $eq: 'completed' }, // Only completed sales count toward revenue
+      status: { $in: ['completed', 'partially_returned'] }, // Include both completed and partially returned
       shopId: shopId
     };
 
@@ -296,14 +539,20 @@ const getProductSalesReport = async (req, res) => {
           _id: '$productInfo._id',
           name: { $first: '$productInfo.name' },
           category: { $first: { $ifNull: ['$categoryInfo.name', 'Uncategorized'] } },
-          quantitySold: { $sum: '$items.quantity' },
-          totalRevenue: { $sum: { $multiply: ['$items.price', '$items.quantity'] } },
-          // Calculate profit based on cost price and selling price
+          // Net quantity sold (sold - returned)
+          quantitySold: { $sum: { $subtract: ['$items.quantity', { $ifNull: ['$items.returnedQuantity', 0] }] } },
+          totalRevenue: { $sum: { 
+            $multiply: [
+              '$items.price', 
+              { $subtract: ['$items.quantity', { $ifNull: ['$items.returnedQuantity', 0] }] }
+            ] 
+          } },
+          // Calculate profit based on sale item's costPrice (historical cost at time of sale) and net quantity
           profit: { 
             $sum: { 
               $multiply: [
-                { $subtract: ['$items.price', { $ifNull: ['$productInfo.cost', 0] }] },
-                '$items.quantity'
+                { $subtract: ['$items.price', { $ifNull: ['$items.costPrice', 0] }] },
+                { $subtract: ['$items.quantity', { $ifNull: ['$items.returnedQuantity', 0] }] }
               ] 
             } 
           } 
@@ -374,10 +623,10 @@ const getProfitDistribution = async (req, res) => {
     // Format for aggregation
     start.setHours(0, 0, 0, 0);
 
-    // Base match condition with shop filter - only completed sales for profit calculation
+    // Base match condition with shop filter - include completed and partially_returned sales for profit calculation
     const matchCondition = { 
       createdAt: { $gte: start, $lte: end },
-      status: { $eq: 'completed' }, // Only completed sales for profit calculation
+      status: { $in: ['completed', 'partially_returned'] }, // Include both completed and partially returned
       shopId: new mongoose.Types.ObjectId(req.user.shopId._id)
     };
 
@@ -418,14 +667,21 @@ const getProfitDistribution = async (req, res) => {
           date: {
             $dateToString: { format: dateFormat, date: "$createdAt" } 
           },
+          // Calculate effective quantity (total - returned)
+          effectiveQuantity: {
+            $subtract: ['$items.quantity', { $ifNull: ['$items.returnedQuantity', 0] }]
+          },
           itemCost: {
             $multiply: [
-              { $ifNull: ['$productInfo.cost', 0] },
-              '$items.quantity'
+              { $ifNull: ['$items.costPrice', 0] },
+              { $subtract: ['$items.quantity', { $ifNull: ['$items.returnedQuantity', 0] }] }
             ]
           },
           itemRevenue: {
-            $multiply: ['$items.price', '$items.quantity']
+            $multiply: [
+              '$items.price', 
+              { $subtract: ['$items.quantity', { $ifNull: ['$items.returnedQuantity', 0] }] }
+            ]
           }
         }
       },
@@ -500,8 +756,18 @@ const getProfitDistribution = async (req, res) => {
       {
         $group: {
           _id: null,
-          total: { $sum: { $multiply: ['$items.price', '$items.quantity'] } },
-          cost: { $sum: { $multiply: [{ $ifNull: ['$productInfo.cost', 0] }, '$items.quantity'] } },
+          total: { $sum: { 
+            $multiply: [
+              '$items.price', 
+              { $subtract: ['$items.quantity', { $ifNull: ['$items.returnedQuantity', 0] }] }
+            ] 
+          } },
+          cost: { $sum: { 
+            $multiply: [
+              { $ifNull: ['$items.costPrice', 0] }, 
+              { $subtract: ['$items.quantity', { $ifNull: ['$items.returnedQuantity', 0] }] }
+            ] 
+          } },
           salesCount: { $sum: 1 },
         }
       },
@@ -571,10 +837,10 @@ const getProfitDistributionDetailed = async (req, res) => {
     // Format for aggregation
     start.setHours(0, 0, 0, 0);
 
-    // Base match condition with shop filter - only completed sales for profit calculation
+    // Base match condition with shop filter - include completed and partially_returned sales for profit calculation
     const matchCondition = { 
       createdAt: { $gte: start, $lte: end },
-      status: { $eq: 'completed' }, // Only completed sales for profit calculation
+      status: { $in: ['completed', 'partially_returned'] }, // Include both completed and partially returned
       shopId: new mongoose.Types.ObjectId(req.user.shopId._id)
     };
 
@@ -625,16 +891,23 @@ const getProfitDistributionDetailed = async (req, res) => {
           periodDate: { 
             $dateToString: { format: dateFormat, date: "$createdAt" } 
           },
-          // Calculate item cost - use 0 if product not found or cost not set
+          // Calculate effective quantity (sold - returned)
+          effectiveQuantity: {
+            $subtract: ["$items.quantity", { $ifNull: ["$items.returnedQuantity", 0] }]
+          },
+          // Calculate item cost using sale item's costPrice (historical cost at time of sale)
           itemCost: {
             $multiply: [
-              { $ifNull: ["$productInfo.cost", 0] },
-              "$items.quantity"
+              { $ifNull: ["$items.costPrice", 0] },
+              { $subtract: ["$items.quantity", { $ifNull: ["$items.returnedQuantity", 0] }] }
             ]
           },
           // Calculate item revenue
           itemRevenue: {
-            $multiply: ["$items.price", "$items.quantity"]
+            $multiply: [
+              "$items.price", 
+              { $subtract: ["$items.quantity", { $ifNull: ["$items.returnedQuantity", 0] }] }
+            ]
           }
         }
       },
@@ -717,8 +990,18 @@ const getProfitDistributionDetailed = async (req, res) => {
       {
         $group: {
           _id: null,
-          total: { $sum: { $multiply: ["$items.price", "$items.quantity"] } },
-          cost: { $sum: { $multiply: [{ $ifNull: ["$productInfo.cost", 0] }, "$items.quantity"] } },
+          total: { $sum: { 
+            $multiply: [
+              "$items.price", 
+              { $subtract: ["$items.quantity", { $ifNull: ["$items.returnedQuantity", 0] }] }
+            ] 
+          } },
+          cost: { $sum: { 
+            $multiply: [
+              { $ifNull: ["$items.costPrice", 0] }, 
+              { $subtract: ["$items.quantity", { $ifNull: ["$items.returnedQuantity", 0] }] }
+            ] 
+          } },
           salesCount: { $sum: 1 }
         }
       },
@@ -800,10 +1083,16 @@ const getSalesByStatus = async (req, res) => {
         $match: matchCondition
       },
       {
+        $addFields: {
+          netAmount: { $subtract: ["$total", { $ifNull: ["$returnedAmount", 0] }] }
+        }
+      },
+      {
         $group: {
           _id: "$status",
           count: { $sum: 1 },
-          totalAmount: { $sum: "$total" }
+          totalAmount: { $sum: "$netAmount" },
+          returnedAmount: { $sum: { $ifNull: ["$returnedAmount", 0] } }
         }
       },
       {
@@ -811,7 +1100,8 @@ const getSalesByStatus = async (req, res) => {
           _id: 0,
           status: { $ifNull: ["$_id", "completed"] },
           count: 1,
-          totalAmount: { $round: ["$totalAmount", 2] }
+          totalAmount: { $round: ["$totalAmount", 2] },
+          returnedAmount: { $round: ["$returnedAmount", 2] }
         }
       }
     ]);

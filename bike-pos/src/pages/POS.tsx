@@ -35,14 +35,17 @@ import {
 import QRScanner from '../components/QRScanner';
 import { useAuth } from '../contexts/AuthContext';
 import { useNotification } from '../contexts/NotificationContext';
-import { categoriesApi, productsApi, salesApi } from '../services/api'; // Add categoriesApi
+import { categoriesApi, productsApi, salesApi, repairJobsApi } from '../services/api'; // Add categoriesApi and repairJobsApi
+import ReceiptHtml from '../components/ReceiptHtml';
+import ReactDOMServer from 'react-dom/server';
 
 interface Product {
-  id: number;
+  id: number; 
   name: string;
   description: string;
   barcode: string;
   price: number;
+  costPrice: number;
   stockQuantity: number;
   image?: string;
   Category?: {
@@ -51,12 +54,23 @@ interface Product {
   };
 }
 
+interface Repair {
+  _id: string;
+  title: string;
+  description: string;
+  price: number;
+  isActive: boolean;
+}
+
 interface CartItem {
   product?: Product;
+  repair?: Repair;
+  repairJobId?: string;
   manualItem?: boolean;
   name?: string;
   barcode?: string;
   price?: number;
+  costPrice?: number;
   quantity: number;
   subtotal: number;
   discount: number;
@@ -64,13 +78,20 @@ interface CartItem {
 
 type PaymentMethod = 'cash' | 'credit_card' | 'debit_card' | 'mobile_payment' | 'other';
 
+type POSMode = 'products' | 'manual' | 'repairs';
+
 interface Sale {
+  id?: number;
+  customerId?: number;
   items: Array<{
     productId?: number;
-    quantity: number;
+    product?: number;
+    quantity: number; 
     price: number;
+    costPrice?: number;
     discount?: number;
     isManual?: boolean;
+    isService?: boolean;
     name?: string;
   }>;
   subtotal: number;
@@ -96,10 +117,11 @@ interface ReceiptData {
     total: number;
   }>;
   subtotal: number;
+  servicesSubtotal: number; // Keep this for receipt calculation
   discount: number;
   tax: number;
   total: number;
-  paymentMethod: string;
+  paymentMethod: PaymentMethod;
 }
 
 // Add Category interface
@@ -113,7 +135,9 @@ const POS: React.FC = () => {
   const { user } = useAuth();
   const { showSuccess, showError } = useNotification();
   const [products, setProducts] = useState<Product[]>([]);
+  const [repairs, setRepairs] = useState<Repair[]>([]);
   const [filteredProducts, setFilteredProducts] = useState<Product[]>([]);
+  const [filteredRepairs, setFilteredRepairs] = useState<Repair[]>([]);
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [barcodeInput, setBarcodeInput] = useState('');
@@ -144,10 +168,15 @@ const POS: React.FC = () => {
 
   const [tempQuantities, setTempQuantities] = useState<{ [key: number]: string }>({});
 
-  const [isManualMode, setIsManualMode] = useState(false);
+  const [mode, setMode] = useState<POSMode>('products');
   const [manualItemName, setManualItemName] = useState('');
   const [manualItemPrice, setManualItemPrice] = useState('');
   const [manualItemQuantity, setManualItemQuantity] = useState('1');
+
+  // Service entry states
+  const [serviceName, setServiceName] = useState('');
+  const [servicePrice, setServicePrice] = useState('');
+  const [serviceQuantity, setServiceQuantity] = useState('1');
 
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [isTypingInInput, setIsTypingInInput] = useState(false);
@@ -176,6 +205,11 @@ const POS: React.FC = () => {
     } finally {
       setLoadingProducts(false);
     }
+  };
+
+  // Add refresh function for repairs
+  const refreshRepairs = async () => {
+    // No longer needed since we use manual entry
   };
 
   useEffect(() => {
@@ -221,12 +255,12 @@ const POS: React.FC = () => {
       return;
     }
 
-    const filtered = products.filter(product =>
+    const filteredProductsData = products.filter(product =>
       product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       product.barcode.includes(searchQuery)
     );
 
-    setFilteredProducts(filtered);
+    setFilteredProducts(filteredProductsData);
   }, [searchQuery, products]);
 
   useEffect(() => {
@@ -267,7 +301,7 @@ const POS: React.FC = () => {
       switch (event.key) {
         case 'F3':
           event.preventDefault();
-          if (!isManualMode) {
+          if (mode === 'products') {
             focusSearchInput();
           }
           break;
@@ -275,7 +309,7 @@ const POS: React.FC = () => {
         case 'f':
           if (event.ctrlKey) {
             event.preventDefault();
-            if (!isManualMode) {
+            if (mode === 'products') {
               focusSearchInput();
             }
           }
@@ -304,7 +338,11 @@ const POS: React.FC = () => {
 
         case 'F2':
           event.preventDefault();
-          setIsManualMode(prev => !prev);
+          setMode(prev => {
+            if (prev === 'products') return 'manual';
+            if (prev === 'manual') return 'repairs';
+            return 'products';
+          });
           break;
 
         case 'F1':
@@ -314,8 +352,8 @@ const POS: React.FC = () => {
 
         default:
           // Only trigger search auto-focus for single character keys
-          // when not in manual mode and it's NOT rapid scanner input
-          if (!isManualMode && !event.ctrlKey && 
+          // when in products mode and it's NOT rapid scanner input
+          if (mode === 'products' && !event.ctrlKey && 
               /^[a-zA-Z0-9]$/.test(event.key) && !isInput && !isRapidInput) {
             // Add a small delay to ensure this isn't part of a scanner sequence
             setTimeout(() => {
@@ -343,7 +381,7 @@ const POS: React.FC = () => {
     showHelpModal, 
     processingSale, 
     cartItems.length, 
-    isManualMode
+    mode
   ]);
 
   useEffect(() => {
@@ -423,7 +461,7 @@ const POS: React.FC = () => {
   }, [checkoutDialogOpen, processingSale]);
 
   const focusSearchInput = () => {
-    if (!isManualMode && searchInputRef.current) {
+    if (mode === 'products' && searchInputRef.current) {
       searchInputRef.current.focus();
       searchInputRef.current.select();
     }
@@ -432,10 +470,23 @@ const POS: React.FC = () => {
   const handleInputFocus = () => setIsTypingInInput(true);
   const handleInputBlur = () => setIsTypingInInput(false);
 
-  const cartSubtotal = cartItems.reduce((sum, item) => sum + item.subtotal, 0);
+  const cartSubtotal = cartItems.reduce((sum, item) => {
+    if (item.product || item.manualItem) {
+      return sum + item.subtotal;
+    }
+    return sum;
+  }, 0);
+  
+  const servicesSubtotal = cartItems.reduce((sum, item) => {
+    if (item.repair) {
+      return sum + item.subtotal;
+    }
+    return sum;
+  }, 0);
+  
   const cartDiscount = cartItems.reduce((sum, item) => sum + item.discount, 0);
   const cartTax = 0;
-  const cartTotal = cartSubtotal - cartDiscount - manualDiscount + cartTax;
+  const cartTotal = cartSubtotal + servicesSubtotal - cartDiscount - manualDiscount + cartTax;
 
   const handleBarcodeSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -595,6 +646,51 @@ const POS: React.FC = () => {
     });
   };
 
+  const addServiceToCart = async (serviceName: string, servicePrice: number, quantity: number) => {
+    try {
+      // Create a quick service repair job
+      const quickServiceData = {
+        customer: {
+          name: customerName || 'Walk-in Customer',
+          phone: customerPhone || 'N/A'
+        },
+        description: serviceName,
+        jobType: 'quick_service',
+        status: 'billed', // Quick services are billed when added to cart
+        estimatedCost: servicePrice * quantity,
+        totalCost: servicePrice * quantity,
+        services: [{
+          name: serviceName,
+          price: servicePrice * quantity
+        }]
+      };
+
+      const response = await repairJobsApi.create(quickServiceData);
+      const createdJob = response.data;
+
+      // Also add to cart for immediate billing
+      const newService: CartItem = {
+        repair: {
+          _id: createdJob._id,
+          title: serviceName,
+          description: 'Quick service',
+          price: servicePrice,
+          isActive: true
+        },
+        repairJobId: createdJob._id,
+        quantity: quantity,
+        subtotal: servicePrice * quantity,
+        discount: 0,
+      };
+
+      setCartItems(prev => [...prev, newService]);
+      showSuccess(`Quick service "${serviceName}" added to cart and job created`);
+    } catch (error) {
+      console.error('Error creating quick service:', error);
+      showError('Failed to create quick service job');
+    }
+  };
+
   const updateCartItemQuantity = (index: number, newQuantity: number) => {
     setCartItems(prevItems => {
       const updatedItems = [...prevItems];
@@ -661,14 +757,17 @@ const POS: React.FC = () => {
       const shopPhone = user?.shopId?.phone || "";
       const shopAddress = user?.shopId?.address || "";
 
-      const printIframe = document.createElement('iframe');
-      printIframe.style.position = 'fixed';
-      printIframe.style.right = '0';
-      printIframe.style.bottom = '0';
-      printIframe.style.width = '0';
-      printIframe.style.height = '0';
-      printIframe.style.border = 'none';
-      document.body.appendChild(printIframe);
+  const printIframe = document.createElement('iframe');
+  printIframe.style.position = 'fixed';
+  printIframe.style.right = '0';
+  printIframe.style.bottom = '0';
+  printIframe.style.width = '0';
+  printIframe.style.height = '0';
+  printIframe.style.border = 'none';
+  printIframe.style.background = 'transparent';
+  printIframe.style.zIndex = '9999';
+  printIframe.setAttribute('id', 'receipt-print-preview');
+  document.body.appendChild(printIframe);
 
       const safeItems = receiptToPrint.items.map(item => ({
         name: item.name || 'Unnamed Item',
@@ -677,205 +776,40 @@ const POS: React.FC = () => {
         total: typeof item.total === 'number' ? item.total : 0
       }));
 
-      const receiptHtml = `
-        <html>
-          <head>
-            <title>XP-365B Receipt</title>
-            <style>
-              @page { 
-                size: 80mm auto;
-                margin: 0mm;
-              }
-              body { 
-                font-family: 'Arial', sans-serif; 
-                font-size: 12px; 
-                width: 72mm;
-                margin: 4mm;
-                padding: 0;
-                -webkit-print-color-adjust: exact;
-                print-color-adjust: exact;
-              }
-              .receipt {
-                width: 100%;
-              }
-              .text-center { 
-                text-align: center; 
-              }
-              hr { 
-                border: none; 
-                border-top: 1px dashed #000; 
-                margin: 5px 0; 
-              }
-              table { 
-                width: 100%; 
-                border-collapse: collapse; 
-                margin: 5px 0;
-              }
-              th {
-                font-weight: bold;
-                text-align: left;
-                font-size: 11px;
-              }
-              .item-row td {
-                font-size: 12px;
-                padding: 2px 0;
-                vertical-align: top;
-              }
-              .item-name {
-                word-wrap: break-word;
-                word-break: break-word;
-                white-space: normal;
-                max-width: 35mm;
-                padding-right: 4px;
-              }
-              .summary-row {
-                display: flex;
-                justify-content: space-between;
-                margin: 2px 0;
-                font-size: 12px;
-              }
-              .total-row {
-                font-weight: bold;
-                font-size: 14px;
-                margin-top: 5px;
-              }
-              .store-info {
-                font-size: 10px;
-                margin-top: 10px;
-              }
-              .paper-cut-space {
-                height: 20mm;
-              }
-            </style>
-            <script>
-              window.addEventListener('afterprint', function() {
-                window.parent.postMessage('printComplete', '*');
-              });
-            </script>
-          </head>
-          <body>
-            <div class="receipt">
-              <div class="text-center">
-                <h2 style="margin: 0px 0 4px 0; font-size: 18px;">${shopName}</h2>
-                ${shopAddress ? `<p style="margin: 0px 0 4px 0; font-size: 12px;">${shopAddress}</p>` : ''}
-                <h3 style="margin: 0px 0 4px 0; font-size: 16px;">RECEIPT</h3>
-                <p style="margin: 3px 0; font-size: 11px;">${receiptToPrint.date}</p>
-                <p style="margin: 3px 0; font-size: 11px;">Invoice: ${receiptToPrint.invoiceNumber}</p>
-              </div>
-              
-              <hr />
-              
-              <div>
-                <p style="margin: 2px 0; font-size: 11px;">Customer: ${receiptToPrint.customer}</p>
-                <p style="margin: 2px 0; font-size: 11px;">Cashier: ${receiptToPrint.cashier}</p>
-              </div>
-              
-              <hr />
-              
-              <table>
-                <thead>
-                  <tr>
-                    <th style="width: 40%;">Item</th>
-                    <th style="width: 15%; text-align: center;">Qty</th>
-                    <th style="width: 20%; text-align: right;">Price</th>
-                    <th style="width: 25%; text-align: right;">Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${safeItems.map(item => `
-                    <tr class="item-row">
-                      <td class="item-name">${item.name}</td>
-                      <td style="text-align: center;">${item.quantity}</td>
-                      <td style="text-align: right;">${item.price.toFixed(2)}</td>
-                      <td style="text-align: right;">${item.total.toFixed(2)}</td>
-                    </tr>
-                  `).join('')}
-                </tbody>
-              </table>
-              
-              <hr />
-              
-              <div>
-                <div class="summary-row">
-                  <span>Subtotal:</span>
-                  <span>Rs. ${receiptToPrint.subtotal.toFixed(2)}</span>
-                </div>
-                ${receiptToPrint.discount > 0 ? `
-                  <div class="summary-row">
-                    <span>Discount:</span>
-                    <span>-Rs. ${receiptToPrint.discount.toFixed(2)}</span>
-                  </div>
-                ` : ''}
-                ${receiptToPrint.tax > 0 ? `
-                  <div class="summary-row">
-                    <span>Tax:</span>
-                    <span>Rs. ${receiptToPrint.tax.toFixed(2)}</span>
-                  </div>
-                ` : ''}
-                <div class="summary-row total-row">
-                  <span>Total:</span>
-                  <span>Rs. ${receiptToPrint.total.toFixed(2)}</span>
-                </div>
-                <div class="summary-row">
-                  <span>Payment Method:</span>
-                  <span>${receiptToPrint.paymentMethod.replace('_', ' ').toUpperCase()}</span>
-                </div>
-              </div>
-              
-              <hr />
-              
-              <div class="text-center">
-                <p style="margin: 2px 0;">Thank you for your purchase!</p>
-                <p style="margin: 2px 0;">Please visit again</p>
-                ${shopPhone ? `<p style="margin: 4px 0; font-size: 11px;">Contact us: ${shopPhone}</p>` : ''}
-              </div>
-              
-              <div class="paper-cut-space"></div>
-            </div>
-          </body>
-        </html>
-      `;
+      // Render ReceiptHtml to HTML string for printing
+      const receiptHtmlString = ReactDOMServer.renderToStaticMarkup(
+        <ReceiptHtml shopName={shopName} shopAddress={shopAddress} shopPhone={shopPhone} receiptData={receiptToPrint} />
+      );
+      const printCss = `<style>
+        @media print {
+          body { margin: 0; }
+        }
+        body { background: #fff; margin: 0; padding: 0; }
+      </style>`;
+      // Only print the receipt content, no extra title or date
+      const fullHtml = `<!DOCTYPE html><html><head>${printCss}</head><body>${receiptHtmlString}</body></html>`;
 
       const iframeDoc = printIframe.contentDocument || printIframe.contentWindow?.document;
       if (iframeDoc) {
         iframeDoc.open();
-        iframeDoc.write(receiptHtml);
+        iframeDoc.write(fullHtml);
         iframeDoc.close();
 
-        window.addEventListener('message', function onPrintComplete(event) {
-          if (event.data === 'printComplete') {
-            window.removeEventListener('message', onPrintComplete);
-            
-            setTimeout(() => {
+        // Immediately trigger print, no preview
+        try {
+          printIframe.contentWindow?.focus();
+          printIframe.contentWindow?.print();
+          setTimeout(() => {
+            if (document.body.contains(printIframe)) {
               document.body.removeChild(printIframe);
               setPrintingReceipt(false);
-            }, 500);
-          }
-        });
-
-        const onIframeLoad = () => {
-          try {
-            printIframe.removeEventListener('load', onIframeLoad);
-            printIframe.contentWindow?.focus();
-            
-            setTimeout(() => {
-              printIframe.contentWindow?.print();
-              
-              setTimeout(() => {
-                if (document.body.contains(printIframe)) {
-                  document.body.removeChild(printIframe);
-                  setPrintingReceipt(false);
-                }
-              }, 3000);
-            }, 200);
-          } catch (err) {
-            console.error('Error during iframe print:', err);
-            document.body.removeChild(printIframe);
-            setPrintingReceipt(false);
-          }
-        };
-
-        printIframe.addEventListener('load', onIframeLoad);
+            }
+          }, 2000);
+        } catch (err) {
+          console.error('Error during iframe print:', err);
+          document.body.removeChild(printIframe);
+          setPrintingReceipt(false);
+        }
       } else {
         throw new Error('Could not access iframe document');
       }
@@ -891,11 +825,30 @@ const POS: React.FC = () => {
 
       const saleItems = cartItems.map(item => {
         if (item.product) {
+          // Debug logging
+          console.log('Processing product for sale:', {
+            name: item.product.name,
+            costPrice: item.product.costPrice,
+            price: item.product.price
+          });
+          
           return {
             productId: item.product.id,
             quantity: item.quantity,
             price: item.product.price,
+            costPrice: item.product.costPrice || 0,
             discount: item.discount || 0
+          };
+        } else if (item.repair) {
+          // Handle services properly with isService flag
+          return {
+            isService: true,
+            name: item.repair.title,
+            quantity: item.quantity,
+            price: item.repair.price,
+            costPrice: item.costPrice || 0,
+            discount: item.discount || 0,
+            repairJobId: item.repairJobId
           };
         } else {
           return {
@@ -910,10 +863,10 @@ const POS: React.FC = () => {
 
       const sale: Sale = {
         items: saleItems,
-        subtotal: cartSubtotal,
+        subtotal: cartSubtotal, // Only products subtotal
         discount: manualDiscount,
         tax: cartTax,
-        total: cartTotal,
+        total: cartTotal, // Total includes both products and services
         paymentMethod,
         customerName: customerName.trim() || undefined,
         customerPhone: customerPhone.trim() || undefined,
@@ -930,15 +883,22 @@ const POS: React.FC = () => {
           customer: customerName || 'Walk-in Customer',
           cashier: user?.name || user?.username || 'Staff',
           items: cartItems.map(item => ({
-            name: item.product ? item.product.name : (item.name || 'Manual Item'),
+            name: item.product ? item.product.name : 
+                  item.repair ? item.repair.title : 
+                  (item.name || 'Manual Item'),
             quantity: item.quantity,
-            price: item.product ? item.product.price : (item.price || 0),
-            total: (item.quantity * (item.product ? item.product.price : (item.price || 0))) - item.discount
+            price: item.product ? item.product.price : 
+                   item.repair ? item.repair.price : 
+                   (item.price || 0),
+            total: (item.quantity * (item.product ? item.product.price : 
+                                   item.repair ? item.repair.price : 
+                                   (item.price || 0))) - item.discount
           })),
-          subtotal: cartSubtotal,
+          subtotal: cartSubtotal, // Only products subtotal
+          servicesSubtotal: servicesSubtotal, // Services subtotal
           discount: cartDiscount + manualDiscount,
           tax: cartTax,
-          total: cartTotal,
+          total: cartTotal, // Total includes both products and services
           paymentMethod: paymentMethod
         };
 
@@ -951,6 +911,19 @@ const POS: React.FC = () => {
 
         showSuccess('Sale completed successfully!');
 
+        // Update repair job status to 'billed' for quick services
+        const quickServiceJobs = cartItems.filter(item => item.repair && item.repair._id);
+        for (const serviceItem of quickServiceJobs) {
+          try {
+            await repairJobsApi.update(serviceItem.repair!._id, { 
+              status: 'billed',
+              saleId: response.data._id 
+            });
+          } catch (error) {
+            console.error('Error updating repair job status:', error);
+          }
+        }
+
         // Refresh products to update stock quantities
         await refreshProducts();
 
@@ -962,6 +935,34 @@ const POS: React.FC = () => {
     } finally {
       setProcessingSale(false);
     }
+  };
+
+  const handleServiceSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!serviceName.trim()) {
+      showError('Service name is required');
+      return;
+    }
+
+    const price = parseFloat(servicePrice);
+    if (isNaN(price) || price <= 0) {
+      showError('Please enter a valid service price');
+      return;
+    }
+
+    const quantity = parseInt(serviceQuantity, 10);
+    if (isNaN(quantity) || quantity <= 0) {
+      showError('Please enter a valid quantity');
+      return;
+    }
+
+    addServiceToCart(serviceName.trim(), price, quantity);
+
+    setServiceName('');
+    setServicePrice('');
+    setServiceQuantity('1');
+    showSuccess('Service added to cart');
   };
 
   const handleManualItemSubmit = (e: React.FormEvent) => {
@@ -1006,7 +1007,7 @@ const POS: React.FC = () => {
     setSearchQuery('');
   };
 
-  const columns = useMemo<Column<Product>[]>(
+  const columns: Column<Product>[] = useMemo(
     () => [
       {
         Header: 'Product Details',
@@ -1101,7 +1102,7 @@ const POS: React.FC = () => {
               <h4 className="fw-bold mb-0">Point of sale</h4>
               <div className="d-none d-lg-block">
                 <small className="text-muted">
-                  <kbd>F1</kbd> Help • <kbd>Ctrl+F</kbd> Search • <kbd>F9</kbd> Checkout • <kbd>F2</kbd> Manual Mode • <kbd>Ctrl+Delete</kbd> Clear Cart
+                  <kbd>F1</kbd> Help • <kbd>Ctrl+F</kbd> Search • <kbd>F9</kbd> Checkout • <kbd>F2</kbd> Toggle Mode • <kbd>Ctrl+Delete</kbd> Clear Cart
                 </small>
               </div>
             </div>
@@ -1175,8 +1176,8 @@ const POS: React.FC = () => {
                               overlay={<Tooltip>Switch to Products (F2)</Tooltip>}
                             >
                               <Button 
-                                variant={isManualMode ? "outline-primary" : "primary"}
-                                onClick={() => setIsManualMode(false)}
+                                variant={mode === "products" ? "primary" : "outline-primary"}
+                                onClick={() => setMode('products')}
                                 className="flex-grow-1 rounded-start"
                               >
                                 <i className="bi bi-grid me-1"></i> Products
@@ -1187,11 +1188,23 @@ const POS: React.FC = () => {
                               overlay={<Tooltip>Switch to Manual Entry (F2)</Tooltip>}
                             >
                               <Button 
-                                variant={isManualMode ? "primary" : "outline-primary"}
-                                onClick={() => setIsManualMode(true)}
-                                className="flex-grow-1 rounded-end"
+                                variant={mode === "manual" ? "primary" : "outline-primary"}
+                                onClick={() => setMode('manual')}
+                                className="flex-grow-1"
                               >
                                 <i className="bi bi-pencil-square me-1"></i> Manual Entry
+                              </Button>
+                            </OverlayTrigger>
+                             <OverlayTrigger
+                              placement="top"
+                              overlay={<Tooltip>Switch to Quick Services (F2)</Tooltip>}
+                            >
+                              <Button 
+                                variant={mode === "repairs" ? "primary" : "outline-primary"}
+                                onClick={() => setMode('repairs')}
+                                className="flex-grow-1 rounded-end"
+                              >
+                                <i className="bi bi-tools me-1"></i> Quick Services
                               </Button>
                             </OverlayTrigger>
                           </div>
@@ -1229,7 +1242,7 @@ const POS: React.FC = () => {
                   
                   <Card className="shadow-sm border-0 products-card">
                     <div className="products-container">
-                      {!isManualMode ? (
+                      {mode === 'products' ? (
                         <div className="products-table-container">
                           {/* Table Controls */}
                           <div className="d-flex justify-content-between align-items-center p-3 border-bottom">
@@ -1361,6 +1374,104 @@ const POS: React.FC = () => {
                             </div>
                           )}
                         </div>
+                      ) : mode === 'repairs' ? (
+                        <div className="services-entry-container">
+                          <div className="p-4 border-bottom bg-light">
+                            <h6 className="mb-0 text-primary d-flex align-items-center">
+                              <i className="bi bi-tools me-2"></i>
+                              Quick Services - Immediate Billing
+                            </h6>
+                            <small className="text-muted">For simple services that can be completed immediately (oil change, tire inflation, etc.)</small>
+                            <div className="mt-2">
+                              <small className="text-info">
+                                <i className="bi bi-info-circle me-1"></i>
+                                For complex repairs that need tracking, use <strong>Repair Jobs</strong> instead
+                              </small>
+                            </div>
+                          </div>
+                          
+                          <div className="p-4">
+                            <Form onSubmit={handleServiceSubmit} className="service-entry-form">
+                              <Row className="g-3">
+                                <Col xs={12}>
+                                  <Form.Group>
+                                    <Form.Label className="fw-semibold">Service Name</Form.Label>
+                                    <Form.Control
+                                      type="text"
+                                      placeholder="Enter service name (e.g., Bike Tune-up, Tire Repair)"
+                                      value={serviceName}
+                                      onChange={(e) => setServiceName(e.target.value)}
+                                      onFocus={handleInputFocus}
+                                      onBlur={handleInputBlur}
+                                      required
+                                    />
+                                  </Form.Group>
+                                </Col>
+                                
+                                <Col xs={12} sm={6}>
+                                  <Form.Group>
+                                    <Form.Label className="fw-semibold">Service Price (Rs.)</Form.Label>
+                                    <InputGroup>
+                                      <InputGroup.Text>Rs.</InputGroup.Text>
+                                      <Form.Control
+                                        type="number"
+                                        placeholder="0.00"
+                                        step="0.01"
+                                        min="0"
+                                        value={servicePrice}
+                                        onChange={(e) => setServicePrice(e.target.value)}
+                                        onFocus={handleInputFocus}
+                                        onBlur={handleInputBlur}
+                                        required
+                                      />
+                                    </InputGroup>
+                                  </Form.Group>
+                                </Col>
+                                
+                                <Col xs={12} sm={6}>
+                                  <Form.Group>
+                                    <Form.Label className="fw-semibold">Quantity</Form.Label>
+                                    <Form.Control
+                                      type="number"
+                                      min="1"
+                                      value={serviceQuantity}
+                                      onChange={(e) => setServiceQuantity(e.target.value)}
+                                      onFocus={handleInputFocus}
+                                      onBlur={handleInputBlur}
+                                      required
+                                    />
+                                  </Form.Group>
+                                </Col>
+                                
+                                <Col xs={12}>
+                                  <div className="d-grid">
+                                    <Button 
+                                      type="submit" 
+                                      variant="primary" 
+                                      size="lg"
+                                      className="d-flex align-items-center justify-content-center gap-2"
+                                    >
+                                      <i className="bi bi-plus-circle"></i>
+                                      Add Service to Cart
+                                    </Button>
+                                  </div>
+                                </Col>
+                              </Row>
+                            </Form>
+                            
+                            <div className="mt-4 p-3 bg-info bg-opacity-10 rounded">
+                              <h6 className="text-info mb-2">
+                                <i className="bi bi-info-circle me-2"></i>
+                                Service Entry Tips
+                              </h6>
+                              <ul className="mb-0 small text-muted">
+                                <li>Services are calculated separately from product revenue</li>
+                                <li>Enter clear service descriptions for better record keeping</li>
+                                <li>Price should include all service charges</li>
+                              </ul>
+                            </div>
+                          </div>
+                        </div>
                       ) : (
                         <div className="text-center my-5 py-4 rounded bg-light">
                           <div className="mb-3">
@@ -1462,7 +1573,7 @@ const POS: React.FC = () => {
                         </ListGroup.Item>
                       ) : (
                         cartItems.map((item, index) => (
-                          <ListGroup.Item key={item.product?.id || `manual-${index}`} className="py-3 cart-item">
+                          <ListGroup.Item key={item.product?.id || item.repair?._id || `manual-${index}`} className="py-3 cart-item">
                             <div className="d-flex align-items-start mb-2">
                               <div className="flex-grow-1">
                                 <h6 className="mb-0 d-flex align-items-center">
@@ -1471,11 +1582,20 @@ const POS: React.FC = () => {
                                       Manual
                                     </span>
                                   )}
-                                  {item.product ? item.product.name : item.name}
+                                  {item.repair && (
+                                    <span className="badge bg-warning text-dark rounded-pill me-2" style={{fontSize: '0.7rem'}}>
+                                      Repair
+                                    </span>
+                                  )}
+                                  {item.product ? item.product.name : 
+                                   item.repair ? item.repair.title : 
+                                   item.name}
                                 </h6>
                                 <div className="d-flex justify-content-between mt-1">
                                   <small className="text-muted">
-                                    Rs. {item.product ? item.product.price.toFixed(2) : item.price?.toFixed(2)}
+                                    Rs. {item.product ? item.product.price.toFixed(2) : 
+                                         item.repair ? item.repair.price.toFixed(2) : 
+                                         item.price?.toFixed(2)}
                                   </small>
                                   <span className="fw-bold text-primary">
                                     Rs. {(item.subtotal - item.discount).toFixed(2)}
@@ -1581,9 +1701,16 @@ const POS: React.FC = () => {
                   <Card.Footer className="bg-white py-3">
                     <div className="mb-3">
                       <div className="d-flex justify-content-between mb-2">
-                        <span className="text-muted">Subtotal:</span>
+                        <span className="text-muted">Products Subtotal:</span>
                         <span>Rs. {cartSubtotal.toFixed(2)}</span>
                       </div>
+                      
+                      {servicesSubtotal > 0 && (
+                        <div className="d-flex justify-content-between mb-2">
+                          <span className="text-muted">Services Subtotal:</span>
+                          <span>Rs. {servicesSubtotal.toFixed(2)}</span>
+                        </div>
+                      )}
                       
                       <div className="d-flex justify-content-between mb-2 align-items-center">
                         <span className="text-muted">Additional Discount:</span>
@@ -1594,10 +1721,11 @@ const POS: React.FC = () => {
                             value={manualDiscount}
                             onChange={(e) => {
                               const value = parseFloat(e.target.value);
+                              const maxDiscount = cartSubtotal + servicesSubtotal - cartDiscount;
                               if (isNaN(value) || value < 0) {
                                 setManualDiscount(0);
-                              } else if (value > cartSubtotal - cartDiscount) {
-                                setManualDiscount(cartSubtotal - cartDiscount);
+                              } else if (value > maxDiscount) {
+                                setManualDiscount(maxDiscount);
                               } else {
                                 setManualDiscount(value);
                               }
@@ -1722,9 +1850,15 @@ const POS: React.FC = () => {
           <div className="mt-4">
             <h6 className="mb-3">Order Summary</h6>
             <div className="d-flex justify-content-between mb-2">
-              <span>Subtotal:</span>
+              <span>Products Subtotal:</span>
               <span>Rs. {cartSubtotal.toFixed(2)}</span>
             </div>
+            {servicesSubtotal > 0 && (
+              <div className="d-flex justify-content-between mb-2">
+                <span>Services Subtotal:</span>
+                <span>Rs. {servicesSubtotal.toFixed(2)}</span>
+              </div>
+            )}
             {cartDiscount > 0 && (
               <div className="d-flex justify-content-between mb-2 text-danger">
                 <span>Item Discounts:</span>
@@ -1803,7 +1937,7 @@ const POS: React.FC = () => {
                   <span><small className="text-muted">Type any letter/number</small></span>
                 </div>
                 <div className="d-flex justify-content-between align-items-center">
-                  <span>Toggle Manual Mode</span>
+                  <span>Switch Mode (Products/Manual/Services)</span>
                   <kbd>F2</kbd>
                 </div>
               </div>

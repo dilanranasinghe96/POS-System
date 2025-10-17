@@ -25,13 +25,14 @@ import {
 import {
   BoxSeam,
   Cart,
-  CurrencyDollar
+  CurrencyDollar,
+  Tools
 } from 'react-bootstrap-icons';
 import { Line } from 'react-chartjs-2';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useNotification } from '../contexts/NotificationContext';
-import { productsApi, reportsApi } from '../services/api';
+import { productsApi, reportsApi, servicesApi, statsApi } from '../services/api';
 
 // Register ChartJS components
 ChartJS.register(
@@ -54,11 +55,15 @@ const Dashboard: React.FC = () => {
   const [salesData, setSalesData] = useState<any>({ 
     summary: [], 
     totals: {
-      total: 0,
+      totalRevenue: 0,
+      productRevenue: 0,
+      serviceRevenue: 0,
       subtotal: 0,
       tax: 0,
       discount: 0,
       totalSales: 0,
+      totalServices: 0,
+      totalTransactions: 0,
       totalItems: 0,
       averageSale: 0
     } 
@@ -67,7 +72,9 @@ const Dashboard: React.FC = () => {
   const [topProducts, setTopProducts] = useState<any[]>([]);
   const [dailySales, setDailySales] = useState<any[]>([]);
   const [todaySales, setTodaySales] = useState<any>({
-    revenue: 0,
+    productRevenue: 0,
+    serviceRevenue: 0,
+    totalRevenue: 0,
     transactions: 0,
     items: 0
   });
@@ -125,32 +132,50 @@ const Dashboard: React.FC = () => {
         // Fetch today's sales data
         const todayResponse = await reportsApi.getDailySales(todayParams);
         
-        // Process today's sales data - only completed sales count toward revenue
+        // Fetch today's service stats
+        const todayServiceResponse = await servicesApi.getStats(todayParams);
+        
+        // Process today's sales and service data
+        let todayProductRevenue = 0;
+        let todayServiceRevenue = 0;
+        let todaySalesTransactions = 0; // Only sales transactions
+        let todayServiceTransactions = 0; // Only service transactions
+        let todayItems = 0;
+        
         if (Array.isArray(todayResponse.data) && todayResponse.data.length > 0) {
           const todayData = todayResponse.data[0];
-          setTodaySales({
-            revenue: todayData.revenue || 0,
-            transactions: todayData.transactions || 0,
-            items: todayData.items || 0
-          });
-        } else {
-          setTodaySales({
-            revenue: 0,
-            transactions: 0,
-            items: 0
-          });
+          todayProductRevenue = todayData.revenue || 0;
+          todaySalesTransactions = todayData.transactions || 0;
+          todayItems = todayData.items || 0;
         }
+        
+        if (todayServiceResponse.data?.stats) {
+          todayServiceRevenue = todayServiceResponse.data.stats.totalRevenue || 0;
+          todayServiceTransactions = todayServiceResponse.data.stats.totalServices || 0;
+        }
+        
+        setTodaySales({
+          productRevenue: todayProductRevenue,
+          serviceRevenue: todayServiceRevenue,
+          totalRevenue: todayProductRevenue + todayServiceRevenue,
+          transactions: todaySalesTransactions, // Only sales transactions
+          items: todayItems
+        });
         
         // Process sales data
         const salesResponseData = salesResponse.data || {};
         setSalesData({
           summary: Array.isArray(salesResponseData.summary) ? salesResponseData.summary : [],
           totals: salesResponseData.totals || {
-            total: 0,
+            totalRevenue: 0,
+            productRevenue: 0,
+            serviceRevenue: 0,
             subtotal: 0,
             tax: 0,
             discount: 0,
             totalSales: 0,
+            totalServices: 0,
+            totalTransactions: 0,
             totalItems: 0,
             averageSale: 0
           }
@@ -236,17 +261,24 @@ const Dashboard: React.FC = () => {
     }),
     datasets: [
       {
-        label: 'Revenue',
-        data: dailySales.map(day => day.revenue),
-        borderColor: 'rgba(75, 192, 192, 1)',
-        backgroundColor: 'rgba(75, 192, 192, 0.2)',
+        label: 'Product Revenue',
+        data: dailySales.map(day => day.productRevenue || day.revenue || 0),
+        borderColor: '#0d6efd',
+        backgroundColor: 'rgba(13, 110, 253, 0.1)',
         tension: 0.4,
       },
       {
-        label: 'Transactions',
-        data: dailySales.map(day => day.transactions),
-        borderColor: 'rgba(255, 159, 64, 1)',
-        backgroundColor: 'rgba(255, 159, 64, 0.2)',
+        label: 'Service Revenue',
+        data: dailySales.map(day => day.serviceRevenue || 0),
+        borderColor: '#198754',
+        backgroundColor: 'rgba(25, 135, 84, 0.1)',
+        tension: 0.4,
+      },
+      {
+        label: 'Sales Transactions',
+        data: dailySales.map(day => day.salesCount || day.transactions || 0),
+        borderColor: '#fd7e14',
+        backgroundColor: 'rgba(253, 126, 20, 0.1)',
         tension: 0.4,
         yAxisID: 'y1',
       }
@@ -353,18 +385,41 @@ const Dashboard: React.FC = () => {
         <>
           {/* Quick Stats */}
           <Row className="g-4 mb-4">
-            {/* Today's Sales Revenue */}
-            <Col lg={4} md={6} sm={6} xs={12}>
+            {/* Today's Total Revenue */}
+            <Col lg={3} md={6} sm={6} xs={12}>
               <Card className="h-100 shadow-sm border-0 stat-card">
                 <Card.Body className="p-3">
                   <div className="d-flex justify-content-between">
                     <div>
-                      <Card.Title as="h6" className="text-muted mb-1">Today's Revenue</Card.Title>
-                      <h3 className="mb-0 fw-bold">Rs. {todaySales.revenue.toLocaleString()}</h3>
+                      <Card.Title as="h6" className="text-muted mb-1">Today's Total Revenue</Card.Title>
+                      <h3 className="mb-0 fw-bold">Rs. {todaySales.totalRevenue.toLocaleString()}</h3>
                       <Badge bg="primary" className="mt-2">Today</Badge>
                     </div>
                     <div className="rounded-circle d-flex align-items-center justify-content-center stat-icon-bg primary-icon">
                       <CurrencyDollar size={22} />
+                    </div>
+                  </div>
+                  <div className="mt-3">
+                    <small className="text-muted">
+                      Products: Rs. {todaySales.productRevenue.toLocaleString()} | Services: Rs. {todaySales.serviceRevenue.toLocaleString()}
+                    </small>
+                  </div>
+                </Card.Body>
+              </Card>
+            </Col>
+
+            {/* Today's Product Revenue */}
+            <Col lg={3} md={6} sm={6} xs={12}>
+              <Card className="h-100 shadow-sm border-0 stat-card">
+                <Card.Body className="p-3">
+                  <div className="d-flex justify-content-between">
+                    <div>
+                      <Card.Title as="h6" className="text-muted mb-1">Product Revenue</Card.Title>
+                      <h3 className="mb-0 fw-bold">Rs. {todaySales.productRevenue.toLocaleString()}</h3>
+                      <Badge bg="info" className="mt-2">Products</Badge>
+                    </div>
+                    <div className="rounded-circle d-flex align-items-center justify-content-center stat-icon-bg info-icon">
+                      <BoxSeam size={22} />
                     </div>
                   </div>
                   <div className="mt-3">
@@ -376,81 +431,96 @@ const Dashboard: React.FC = () => {
               </Card>
             </Col>
 
+            {/* Today's Service Revenue */}
+            <Col lg={3} md={6} sm={6} xs={12}>
+              <Card className="h-100 shadow-sm border-0 stat-card">
+                <Card.Body className="p-3">
+                  <div className="d-flex justify-content-between">
+                    <div>
+                      <Card.Title as="h6" className="text-muted mb-1">Service Revenue</Card.Title>
+                      <h3 className="mb-0 fw-bold">Rs. {todaySales.serviceRevenue.toLocaleString()}</h3>
+                      <Badge bg="success" className="mt-2">Services</Badge>
+                    </div>
+                    <div className="rounded-circle d-flex align-items-center justify-content-center stat-icon-bg success-icon">
+                      <Tools size={22} />
+                    </div>
+                  </div>
+                  <div className="mt-3">
+                    <small className="text-muted">
+                      Manual services
+                    </small>
+                  </div>
+                </Card.Body>
+              </Card>
+            </Col>
+
             {/* Today's Transactions */}
-            <Col lg={4} md={6} sm={6} xs={12}>
+            <Col lg={3} md={6} sm={6} xs={12}>
               <Card className="h-100 shadow-sm border-0 stat-card">
                 <Card.Body className="p-3">
                   <div className="d-flex justify-content-between">
                     <div>
                       <Card.Title as="h6" className="text-muted mb-1">Today's Transactions</Card.Title>
                       <h3 className="mb-0 fw-bold">{todaySales.transactions}</h3>
-                      <Badge bg="info" className="mt-2">Today</Badge>
+                      <Badge bg="warning" className="mt-2">Today</Badge>
                     </div>
-                    <div className="rounded-circle d-flex align-items-center justify-content-center stat-icon-bg info-icon">
+                    <div className="rounded-circle d-flex align-items-center justify-content-center stat-icon-bg warning-icon">
                       <Cart size={22} />
                     </div>
                   </div>
                   <div className="mt-3">
                     <small className="text-muted">
-                      Avg: Rs. {todaySales.transactions > 0 ? (todaySales.revenue / todaySales.transactions).toLocaleString() : '0'} per sale
+                      Avg: Rs. {todaySales.transactions > 0 ? (todaySales.totalRevenue / todaySales.transactions).toLocaleString() : '0'} per transaction
                     </small>
+                  </div>
+                </Card.Body>
+              </Card>
+            </Col>
+          </Row>
+
+          {/* Revenue Summary Cards */}
+          <Row className="g-4 mb-4">
+            <Col lg={4} md={12}>
+              <Card className="h-100 shadow-sm border-0">
+                <Card.Body className="p-4">
+                  <Card.Title as="h5" className="mb-3">Revenue Summary (Last 7 Days)</Card.Title>
+                  <div className="mb-3">
+                    <div className="d-flex justify-content-between align-items-center mb-2">
+                      <span className="text-muted">Total Revenue</span>
+                      <h4 className="mb-0 fw-bold">Rs. {salesData.totals.totalRevenue?.toLocaleString() || '0'}</h4>
+                    </div>
+                    <div className="d-flex justify-content-between align-items-center mb-2">
+                      <span className="text-muted">Product Revenue</span>
+                      <span className="fw-semibold">Rs. {salesData.totals.productRevenue?.toLocaleString() || '0'}</span>
+                    </div>
+                    <div className="d-flex justify-content-between align-items-center mb-2">
+                      <span className="text-muted">Service Revenue</span>
+                      <span className="fw-semibold">Rs. {salesData.totals.serviceRevenue?.toLocaleString() || '0'}</span>
+                    </div>
+                    <hr />
+                    <div className="d-flex justify-content-between align-items-center mb-2">
+                      <span className="text-muted">Total Sales</span>
+                      <span>{salesData.totals.totalSales || 0}</span>
+                    </div>
+                    <div className="d-flex justify-content-between align-items-center">
+                      <span className="text-muted">Total Services</span>
+                      <span>{salesData.totals.totalServices || 0}</span>
+                    </div>
                   </div>
                 </Card.Body>
               </Card>
             </Col>
             
             {/* Low Stock Items */}
-            <Col lg={4} md={6} sm={6} xs={12}>
+            <Col lg={8} md={12}>
               <Card className="h-100 shadow-sm border-0 stat-card">
-                <Card.Body className="p-3">
-                  <div className="d-flex justify-content-between">
-                    <div>
-                      <Card.Title as="h6" className="text-muted mb-1">Low Stock Items</Card.Title>
-                      <h3 className="mb-0 fw-bold">{lowStockProducts.length}</h3>
-                      <Badge bg="danger" className="mt-2">Needs attention</Badge>
-                    </div>
-                    <div className="rounded-circle d-flex align-items-center justify-content-center stat-icon-bg danger-icon">
-                      <BoxSeam size={22} />
-                    </div>
+                <Card.Body className="p-4">
+                  <div className="d-flex justify-content-between align-items-center mb-3">
+                    <Card.Title as="h5" className="mb-0">Low Stock Alert</Card.Title>
+                    <Badge bg="danger">
+                      {lowStockProducts.length} items
+                    </Badge>
                   </div>
-                </Card.Body>
-              </Card>
-            </Col>
-          </Row>
-          
-          {/* Charts */}
-          <Row className="mb-4 g-4">
-            {/* Sales Trend Chart */}
-           
-              <Card className="h-100 shadow-sm border-0">
-                <Card.Body className="p-4">
-                  <Card.Title as="h5" className="mb-3">Sales Trend</Card.Title>
-                  
-                  {dailySales.length > 0 ? (
-                    <div style={{ height: '350px' }}>
-                      <Line
-                        data={salesChartData}
-                        options={salesChartOptions}
-                      />
-                    </div>
-                  ) : (
-                    <div className="text-center py-5">
-                      <p className="text-muted">No sales data available for the selected period</p>
-                    </div>
-                  )}
-                </Card.Body>
-              </Card>
-            
-           
-          </Row>
-          
-          {/* Additional Dashboard Content */}
-          <Row className="g-4">
-            {/* Low Stock Products */}
-            <Col lg={6} md={12}>
-              <Card className="h-100 shadow-sm border-0">
-                <Card.Body className="p-4">
-                  <Card.Title as="h5" className="mb-3">Low Stock Alert</Card.Title>
                   
                   {lowStockProducts.length > 0 ? (
                     <div className="table-responsive">
@@ -463,7 +533,7 @@ const Dashboard: React.FC = () => {
                           </tr>
                         </thead>
                         <tbody>
-                          {lowStockProducts.map((product) => (
+                          {lowStockProducts.slice(0, 5).map((product) => (
                             <tr key={product.id}>
                               <td>{product.name}</td>
                               <td>{product.stock}</td>
@@ -480,7 +550,7 @@ const Dashboard: React.FC = () => {
                       </Table>
                     </div>
                   ) : (
-                    <div className="text-center py-5">
+                    <div className="text-center py-3">
                       <p className="text-muted">No low stock products</p>
                     </div>
                   )}
@@ -489,15 +559,43 @@ const Dashboard: React.FC = () => {
                   <Button 
                     variant="outline-primary" 
                     size="sm"
-                    onClick={() => navigate('/inventory')}
+                    onClick={() => navigate('/products')}
                   >
-                    View All Inventory
+                    View All Products
                   </Button>
                 </Card.Footer>
               </Card>
             </Col>
-            
-            {/* Recent Sales */}
+          </Row>
+          
+          {/* Charts */}
+          <Row className="mb-4 g-4">
+            {/* Revenue & Transaction Trend Chart */}
+            <Col xs={12}>
+              <Card className="h-100 shadow-sm border-0">
+                <Card.Body className="p-4">
+                  <Card.Title as="h5" className="mb-3">Revenue & Transaction Trends (Last 7 Days)</Card.Title>
+                  
+                  {dailySales.length > 0 ? (
+                    <div style={{ height: '350px' }}>
+                      <Line
+                        data={salesChartData}
+                        options={salesChartOptions}
+                      />
+                    </div>
+                  ) : (
+                    <div className="text-center py-5">
+                      <p className="text-muted">No sales data available for the selected period</p>
+                    </div>
+                  )}
+                </Card.Body>
+              </Card>
+            </Col>
+          </Row>
+          
+          {/* Additional Dashboard Content */}
+          <Row className="g-4">
+            {/* Recent Sales Summary */}
             <Col lg={6} md={12}>
               <Card className="h-100 shadow-sm border-0">
                 <Card.Body className="p-4">
@@ -509,9 +607,10 @@ const Dashboard: React.FC = () => {
                         <thead className="table-light">
                           <tr>
                             <th>Date</th>
-                            <th>Sales</th>
-                            <th>Revenue</th>
-                            <th>Items Sold</th>
+                            <th>Transactions</th>
+                            <th>Product Revenue</th>
+                            <th>Service Revenue</th>
+                            <th>Total Revenue</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -523,9 +622,10 @@ const Dashboard: React.FC = () => {
                                 <td>{new Date(day.date).toLocaleDateString('en-US', { 
                                   weekday: 'short', month: 'short', day: 'numeric' 
                                 })}</td>
-                                <td>{day.transactions}</td>
-                                <td>Rs. {day.revenue.toLocaleString()}</td>
-                                <td>{day.items}</td>
+                                <td>{(day.salesCount || 0) + (day.servicesCount || 0)}</td>
+                                <td>Rs. {(day.productRevenue || day.revenue || 0).toLocaleString()}</td>
+                                <td>Rs. {(day.serviceRevenue || 0).toLocaleString()}</td>
+                                <td>Rs. {((day.productRevenue || day.revenue || 0) + (day.serviceRevenue || 0)).toLocaleString()}</td>
                               </tr>
                             ))}
                         </tbody>
@@ -544,6 +644,51 @@ const Dashboard: React.FC = () => {
                     onClick={() => navigate('/sales')}
                   >
                     View All Sales
+                  </Button>
+                </Card.Footer>
+              </Card>
+            </Col>
+
+            {/* Top Products */}
+            <Col lg={6} md={12}>
+              <Card className="h-100 shadow-sm border-0">
+                <Card.Body className="p-4">
+                  <Card.Title as="h5" className="mb-3">Top Selling Products</Card.Title>
+                  
+                  {topProducts.length > 0 ? (
+                    <div className="table-responsive">
+                      <Table hover className="mb-0">
+                        <thead className="table-light">
+                          <tr>
+                            <th>Product</th>
+                            <th>Sold</th>
+                            <th>Revenue</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {topProducts.map((product) => (
+                            <tr key={product.id}>
+                              <td>{product.name}</td>
+                              <td>{product.totalSold}</td>
+                              <td>Rs. {product.totalRevenue.toLocaleString()}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </Table>
+                    </div>
+                  ) : (
+                    <div className="text-center py-5">
+                      <p className="text-muted">No product sales data</p>
+                    </div>
+                  )}
+                </Card.Body>
+                <Card.Footer className="bg-white border-0 pt-0">
+                  <Button 
+                    variant="outline-primary" 
+                    size="sm"
+                    onClick={() => navigate('/reports')}
+                  >
+                    View Detailed Reports
                   </Button>
                 </Card.Footer>
               </Card>

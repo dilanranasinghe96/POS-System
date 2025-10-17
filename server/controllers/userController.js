@@ -165,7 +165,15 @@ const updateUser = async (req, res) => {
     // Check if requester has permission to update this user
     if (req.user.role !== 'developer') {
       // Non-developers can only update users from their own shop
-      if (!req.user.shopId || !user.shopId || req.user.shopId.toString() !== user.shopId.toString()) {
+      if (!req.user.shopId || !user.shopId) {
+        return res.status(403).json({ message: 'Shop information missing' });
+      }
+      
+      // Handle populated shopId (from auth middleware) vs non-populated shopId
+      const currentUserShopId = req.user.shopId._id ? req.user.shopId._id.toString() : req.user.shopId.toString();
+      const targetUserShopId = user.shopId.toString();
+      
+      if (currentUserShopId !== targetUserShopId) {
         return res.status(403).json({ message: 'Not authorized to update this user' });
       }
       
@@ -251,7 +259,15 @@ const toggleUserStatus = async (req, res) => {
     // Check permissions
     if (req.user.role !== 'developer') {
       // Non-developers can only manage users from their own shop
-      if (!req.user.shopId || !user.shopId || req.user.shopId.toString() !== user.shopId.toString()) {
+      if (!req.user.shopId || !user.shopId) {
+        return res.status(403).json({ message: 'Shop information missing' });
+      }
+      
+      // Handle populated shopId (from auth middleware) vs non-populated shopId
+      const currentUserShopId = req.user.shopId._id ? req.user.shopId._id.toString() : req.user.shopId.toString();
+      const targetUserShopId = user.shopId.toString();
+      
+      if (currentUserShopId !== targetUserShopId) {
         return res.status(403).json({ message: 'Not authorized to manage this user' });
       }
       
@@ -296,8 +312,25 @@ const deleteUser = async (req, res) => {
     // Check permissions
     if (req.user.role !== 'developer') {
       // Non-developers can only delete users from their own shop
-      if (!req.user.shopId || !user.shopId || req.user.shopId.toString() !== user.shopId.toString()) {
-        return res.status(403).json({ message: 'Not authorized to delete this user' });
+      if (!req.user.shopId || !user.shopId) {
+        return res.status(403).json({ message: 'Shop information missing' });
+      }
+      
+      // Handle populated shopId (from auth middleware) vs non-populated shopId
+      // req.user.shopId is populated (has _id property), user.shopId is not
+      const currentUserShopId = req.user.shopId._id ? req.user.shopId._id.toString() : req.user.shopId.toString();
+      const targetUserShopId = user.shopId.toString();
+      
+      console.log('Delete user permission check:', {
+        currentUserRole: req.user.role,
+        currentUserShopId: currentUserShopId,
+        targetUserShopId: targetUserShopId,
+        targetUserRole: user.role,
+        shopIdMatch: currentUserShopId === targetUserShopId
+      });
+      
+      if (currentUserShopId !== targetUserShopId) {
+        return res.status(403).json({ message: 'Not authorized to delete this user - different shop' });
       }
       
       // Can't delete users with higher role

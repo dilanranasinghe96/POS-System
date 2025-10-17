@@ -23,6 +23,10 @@ const SaleSchema = new mongoose.Schema({
       type: Number,
       required: true
     },
+    costPrice: {
+      type: Number,
+      default: 0
+    },
     discount: {
       type: Number,
       default: 0
@@ -39,6 +43,10 @@ const SaleSchema = new mongoose.Schema({
       type: Number,
       default: 0
     }
+  }],
+  services: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Service'
   }],
   subtotal: {
     type: Number,
@@ -102,12 +110,43 @@ const SaleSchema = new mongoose.Schema({
   returnedAmount: {
     type: Number,
     default: 0
-  }
+  },
+  returnHistory: [{
+    itemId: {
+      type: mongoose.Schema.Types.ObjectId,
+      required: true
+    },
+    itemName: {
+      type: String,
+      required: true
+    },
+    returnQuantity: {
+      type: Number,
+      required: true
+    },
+    returnAmount: {
+      type: Number,
+      required: true
+    },
+    reason: {
+      type: String,
+      trim: true
+    },
+    returnedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true
+    },
+    returnedAt: {
+      type: Date,
+      default: Date.now
+    }
+  }]
 });
 
 // Add utility method for receipt data
 SaleSchema.methods.getReceiptData = function() {
-  // Map items with better handling of manual items
+  // Map product and manual items
   const itemsWithDetails = this.items.map(item => {
     if (item.isManual) {
       return {
@@ -115,7 +154,8 @@ SaleSchema.methods.getReceiptData = function() {
         quantity: item.quantity,
         price: item.price,
         discount: item.discount || 0,
-        subtotal: (item.price * item.quantity) - (item.discount || 0)
+        subtotal: (item.price * item.quantity) - (item.discount || 0),
+        isManual: true
       };
     } else {
       // For regular product items
@@ -130,6 +170,22 @@ SaleSchema.methods.getReceiptData = function() {
     }
   });
   
+  // Add services to items list if populated
+  if (this.services && Array.isArray(this.services)) {
+    this.services.forEach(service => {
+      if (service && typeof service === 'object') {
+        itemsWithDetails.push({
+          name: service.name || 'Service',
+          quantity: service.quantity || 1,
+          price: service.price || 0,
+          discount: service.discount || 0,
+          subtotal: service.total || ((service.price || 0) * (service.quantity || 1)) - (service.discount || 0),
+          isService: true
+        });
+      }
+    });
+  }
+  
   return {
     id: this._id.toString(),
     invoiceNumber: this.invoiceNumber,
@@ -137,6 +193,7 @@ SaleSchema.methods.getReceiptData = function() {
     customer: this.customer,
     items: itemsWithDetails,
     subtotal: this.subtotal,
+    servicesSubtotal: this.servicesSubtotal || 0,
     tax: this.tax,
     discount: this.discount,
     total: this.total,
@@ -192,19 +249,21 @@ SaleSchema.pre('save', async function(next) {
     }
   }
   
-  // Calculate totals if not already calculated
-  if (this.isNew || this.isModified('items')) {
-    // Calculate subtotal from items if not specified
-    if (!this.subtotal || this.isModified('items')) {
-      this.subtotal = this.items.reduce((sum, item) => {
-        return sum + (item.price * item.quantity);
-      }, 0);
+  // Calculate totals only if not already set by controller
+  if (this.isNew || this.isModified('items') || this.isModified('services')) {
+    // Only recalculate subtotal if not already set by controller
+    if (this.subtotal === undefined || this.subtotal === null) {
+      this.subtotal = this.items && this.items.length > 0
+        ? this.items.reduce((sum, item) => sum + (item.price * item.quantity), 0)
+        : 0;
     }
     
-    // Calculate item discounts
-    const itemDiscounts = this.items.reduce((sum, item) => {
-      return sum + (item.discount || 0);
-    }, 0);
+    // Services are handled separately - no servicesSubtotal in Sale model
+    
+    // Calculate item discounts (safe for empty items array)
+    const itemDiscounts = this.items && this.items.length > 0 
+      ? this.items.reduce((sum, item) => sum + (item.discount || 0), 0)
+      : 0;
     
     // Set total discount (item discounts + additional discount)
     if (!this.discount) this.discount = 0;
@@ -212,8 +271,11 @@ SaleSchema.pre('save', async function(next) {
     // Set tax if not specified
     if (!this.tax) this.tax = 0;
     
-    // Calculate total - ensuring correct calculation subtracting both discounts
-    this.total = this.subtotal - this.discount - itemDiscounts + this.tax;
+    // Only recalculate total if not already set by controller
+    // Note: Total from frontend includes services, so we use that
+    if (this.total === undefined || this.total === null) {
+      this.total = this.subtotal - this.discount - itemDiscounts + this.tax;
+    }
   }
   
   next();

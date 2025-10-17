@@ -4,7 +4,26 @@ const SaleItemSchema = new mongoose.Schema({
   product: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Product',
-    required: true
+    required: function() {
+      return !this.repair && !this.isManual;
+    }
+  },
+  repair: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Repair',
+    required: function() {
+      return !this.product && !this.isManual;
+    }
+  },
+  isManual: {
+    type: Boolean,
+    default: false
+  },
+  name: {
+    type: String,
+    required: function() {
+      return this.isManual;
+    }
   },
   quantity: {
     type: Number,

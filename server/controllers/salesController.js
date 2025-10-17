@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const Sale = require('../models/Sale');
 const SaleItem = require('../models/SaleItem');
 const Product = require('../models/Product');
+const Service = require('../models/Service');
 const User = require('../models/User');
 const Customer = require('../models/Customer');
 const Shop = require('../models/Shop');
@@ -46,6 +47,9 @@ const generateInvoiceNumber = async (shopId) => {
 
 // Create a new sale
 const createSale = async (req, res) => {
+  console.log('=== SALES CONTROLLER CREATE SALE STARTED ===');
+  console.log('Request body:', JSON.stringify(req.body, null, 2));
+  
   const session = await mongoose.startSession();
   session.startTransaction();
   
@@ -56,6 +60,7 @@ const createSale = async (req, res) => {
       customerPhone,
       items,
       subtotal,
+      servicesSubtotal = 0,
       discount = 0,
       tax = 0,
       total,
@@ -63,10 +68,23 @@ const createSale = async (req, res) => {
       notes
     } = req.body;
     
-    if (!items || !Array.isArray(items) || items.length === 0) {
+    console.log('Extracted items:', JSON.stringify(items, null, 2));
+    
+    if (!items || !Array.isArray(items)) {
       await session.abortTransaction();
       session.endSession();
-      return res.status(400).json({ message: 'Sale items are required' });
+      return res.status(400).json({ message: 'Items array is required' });
+    }
+    
+    // Check if there are any items (products, manual items, or services)
+    const hasProducts = items.some(item => !item.isService);
+    const hasServices = items.some(item => item.isService);
+    
+    
+    if (!hasProducts && !hasServices) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ message: 'At least one product or service is required' });
     }
     
     // Generate invoice number
@@ -103,15 +121,27 @@ const createSale = async (req, res) => {
       }
     }
     
-    // Create new sale
+    // Calculate only product subtotal in backend (services handled separately)
+    let calculatedSubtotal = 0;
+    
+    // Pre-calculate product subtotal only (before discounts)
+    for (const item of items) {
+      if (!item.isService) { // Only count non-service items
+        const itemSubtotal = item.price * item.quantity; // Before discount
+        calculatedSubtotal += itemSubtotal;
+      }
+    }
+
+    // Create new sale with only product data (no services data)
     const sale = new Sale({
       invoiceNumber,
       customer: customerId,
       items: [],
-      subtotal,
+      services: [], // Only references to services, no service totals
+      subtotal: calculatedSubtotal, // Only products subtotal
       discount,
       tax,
-      total,
+      total, // Use the total from frontend (includes services)
       paymentMethod,
       user: req.user.id,
       shopId: req.user.shopId,
@@ -119,9 +149,28 @@ const createSale = async (req, res) => {
       createdAt: new Date()
     });
     
-    // Process items and update product stock
+    // Process items and create service records
     for (const item of items) {
-      if (item.isManual) {
+      if (item.isService) {
+        // Create service record in Services collection
+        const service = new Service({
+          name: item.name,
+          description: 'Service from POS sale',
+          price: item.price,
+          quantity: item.quantity,
+          total: (item.price * item.quantity) - (item.discount || 0),
+          discount: item.discount || 0,
+          paymentMethod: paymentMethod,
+          saleId: null, // Will be set after sale is created
+          invoiceNumber: invoiceNumber,
+          userId: req.user.id,
+          shopId: req.user.shopId,
+          status: 'completed'
+        });
+        
+        await service.save({ session });
+        sale.services.push(service._id);
+      } else if (item.isManual) {
         // Handle manual items - no product reference or stock updates needed
         sale.items.push({
           isManual: true,
@@ -155,13 +204,17 @@ const createSale = async (req, res) => {
           });
         }
         
-        // Add item to sale
+        // Add item to sale with cost price
         sale.items.push({
           product: product._id,
           quantity: item.quantity,
           price: item.price,
+          costPrice: product.cost || 0, // Use actual cost from database
           discount: item.discount || 0
         });
+        
+        // Debug logging for cost price
+        console.log(`Product ${product.name}: cost=${product.cost}, saved costPrice=${product.cost || 0}`);
         
         // Update product stock
         product.quantity -= item.quantity;
@@ -171,6 +224,15 @@ const createSale = async (req, res) => {
     
     // Save the sale
     await sale.save({ session });
+    
+    // Update service records with the sale ID
+    if (sale.services.length > 0) {
+      await Service.updateMany(
+        { _id: { $in: sale.services } },
+        { saleId: sale._id },
+        { session }
+      );
+    }
     
     // Commit transaction
     await session.commitTransaction();
@@ -184,7 +246,8 @@ const createSale = async (req, res) => {
         path: 'shopId',
         select: 'name'
       })
-      .populate('items.product');
+      .populate('items.product')
+      .populate('services');
     
     res.status(201).json(createdSale);
   } catch (error) {
@@ -324,6 +387,7 @@ const getSaleById = async (req, res) => {
         path: 'items.product',
         select: 'name price sku barcode _id'
       })
+      .populate('services')
       .populate('customer')
       .populate('user', 'name username');
     
@@ -348,13 +412,15 @@ const getSaleById = async (req, res) => {
       saleObj.date = saleObj.createdAt;
     }
     
-    // Fix to correctly handle both manual and product items
+    // Fix to correctly handle manual and product items, plus services
+    const allSaleItems = [];
+    
+    // Add product and manual items
     if (saleObj.items && Array.isArray(saleObj.items)) {
-      // Add legacy SaleItems field for frontend compatibility
-      saleObj.SaleItems = saleObj.items.map(item => {
+      saleObj.items.forEach(item => {
         // For manual items
         if (item.isManual) {
-          return {
+          allSaleItems.push({
             id: item._id.toString(),
             isManual: true,
             name: item.name || 'Manual Item',
@@ -362,7 +428,7 @@ const getSaleById = async (req, res) => {
             price: item.price,
             discount: item.discount || 0,
             subtotal: item.price * item.quantity
-          };
+          });
         } 
         // For product items
         else {
@@ -371,7 +437,7 @@ const getSaleById = async (req, res) => {
           
           // Check if product exists and has necessary fields
           if (item.product) {
-            return {
+            allSaleItems.push({
               id: item._id.toString(),
               productId: item.product._id.toString(),
               quantity: item.quantity,
@@ -389,10 +455,10 @@ const getSaleById = async (req, res) => {
                 name: item.product.name || 'Unnamed Product',
                 barcode: item.product.barcode || item.product.sku || ''
               }
-            };
+            });
           } else {
             // If product reference is missing or broken
-            return {
+            allSaleItems.push({
               id: item._id.toString(),
               productId: item.product, // Keep the ID reference if available
               quantity: item.quantity,
@@ -409,16 +475,164 @@ const getSaleById = async (req, res) => {
                 name: 'Product Not Found',
                 barcode: ''
               }
-            };
+            });
           }
         }
       });
     }
     
+    // Add services
+    if (saleObj.services && Array.isArray(saleObj.services)) {
+      saleObj.services.forEach(service => {
+        if (service && typeof service === 'object') {
+          allSaleItems.push({
+            id: service._id.toString(),
+            isService: true,
+            name: service.name || 'Service',
+            quantity: service.quantity || 1,
+            price: service.price || 0,
+            discount: service.discount || 0,
+            subtotal: service.total || ((service.price || 0) * (service.quantity || 1))
+          });
+        }
+      });
+    }
+    
+    // Set the combined items array
+    saleObj.SaleItems = allSaleItems;
+    
     res.status(200).json(saleObj);
   } catch (error) {
     console.error('Error fetching sale:', error);
     res.status(500).json({ message: 'Server error fetching sale details' });
+  }
+};
+
+// Return single item from sale
+const returnSingleItem = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+  
+  try {
+    const { saleId, itemId, returnQuantity, reason } = req.body;
+    
+    if (!saleId || !itemId || !returnQuantity || returnQuantity <= 0) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ message: 'Sale ID, item ID, and return quantity are required' });
+    }
+    
+    const filter = { _id: saleId };
+    
+    // Add shop filter for non-developers
+    if (req.user.role !== 'developer') {
+      // Handle populated shopId from auth middleware
+      filter.shopId = req.user.shopId._id ? req.user.shopId._id : req.user.shopId;
+    }
+    
+    const sale = await Sale.findOne(filter).populate('items.product').session(session);
+    
+    if (!sale) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({ message: 'Sale not found' });
+    }
+    
+    // Find the item to return
+    const itemIndex = sale.items.findIndex(item => item._id.toString() === itemId);
+    
+    if (itemIndex === -1) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({ message: 'Item not found in sale' });
+    }
+    
+    const item = sale.items[itemIndex];
+    
+    // Check if return quantity is valid
+    const availableToReturn = item.quantity - (item.returnedQuantity || 0);
+    if (returnQuantity > availableToReturn) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ 
+        message: `Cannot return ${returnQuantity} items. Only ${availableToReturn} available for return.` 
+      });
+    }
+    
+    // Update returned quantity
+    sale.items[itemIndex].returnedQuantity = (item.returnedQuantity || 0) + returnQuantity;
+    
+    // Restore inventory for product items only (not services or manual items)
+    if (!item.isManual && !item.isService && item.product) {
+      const product = await Product.findById(item.product._id || item.product).session(session);
+      if (product) {
+        product.quantity += returnQuantity;
+        await product.save({ session });
+      }
+    }
+    
+    // Calculate return amount
+    const returnAmount = (item.price * returnQuantity) - ((item.discount || 0) * returnQuantity / item.quantity);
+    sale.returnedAmount = (sale.returnedAmount || 0) + returnAmount;
+    
+    // Add return history
+    if (!sale.returnHistory) {
+      sale.returnHistory = [];
+    }
+    
+    sale.returnHistory.push({
+      itemId: itemId,
+      itemName: item.isManual ? item.name : (item.product?.name || 'Unknown Product'),
+      returnQuantity: returnQuantity,
+      returnAmount: returnAmount,
+      reason: reason,
+      returnedBy: req.user.id,
+      returnedAt: new Date()
+    });
+    
+    // Check if all items are fully returned
+    const allItemsReturned = sale.items.every(item => 
+      (item.returnedQuantity || 0) >= item.quantity
+    );
+    
+    console.log('Return status check:', {
+      totalItems: sale.items.length,
+      itemsChecked: sale.items.map(item => ({
+        name: item.product?.name || item.name,
+        quantity: item.quantity,
+        returnedQuantity: item.returnedQuantity || 0,
+        fullyReturned: (item.returnedQuantity || 0) >= item.quantity
+      })),
+      allItemsReturned: allItemsReturned
+    });
+    
+    if (allItemsReturned) {
+      sale.status = 'returned';
+    } else {
+      sale.status = 'partially_returned';
+    }
+    
+    await sale.save({ session });
+    
+    await session.commitTransaction();
+    session.endSession();
+    
+    // Return updated sale
+    const updatedSale = await Sale.findById(saleId)
+      .populate('customer')
+      .populate('user', 'name username')
+      .populate('items.product');
+    
+    res.status(200).json({
+      message: 'Item returned successfully',
+      sale: updatedSale,
+      returnAmount: returnAmount
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
+    console.error('Error returning item:', error);
+    res.status(500).json({ message: 'Server error returning item' });
   }
 };
 
@@ -456,9 +670,9 @@ const updateSaleStatus = async (req, res) => {
     
     // Handle full return
     if (status === 'returned' && oldStatus !== 'returned') {
-      // Restore inventory for all items
+      // Restore inventory for product items only (not services or manual items)
       for (const item of sale.items) {
-        if (!item.isManual && item.product) {
+        if (!item.isManual && !item.isService && item.product) {
           const product = await Product.findById(item.product._id || item.product).session(session);
           if (product) {
             product.quantity += item.quantity;
@@ -561,6 +775,7 @@ module.exports = {
   getAllSales,
   getSaleById,
   updateSaleStatus,
+  returnSingleItem,
   getSalesReport,
   generateReceipt,
   getSalesProfitReport

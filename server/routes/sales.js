@@ -24,6 +24,7 @@ router.get('/:id', authenticate, (req, res, next) => {
 }, salesController.getSaleById);
 
 router.patch('/:id/status', authenticate, authorize('admin', 'manager'), salesController.updateSaleStatus);
+router.post('/return-item', authenticate, authorize('admin', 'manager'), salesController.returnSingleItem);
 router.get('/:id/receipt', authenticate, salesController.generateReceipt);
 
 module.exports = router;

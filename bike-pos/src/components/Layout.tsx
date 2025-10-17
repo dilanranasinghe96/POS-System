@@ -14,7 +14,8 @@ import {
   Gear,
   PeopleFill,
   Receipt,
-  Speedometer2
+  Speedometer2,
+  Tools
 } from 'react-bootstrap-icons';
 import { LinkContainer } from 'react-router-bootstrap';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
@@ -49,6 +50,13 @@ const getMenuItems = (role: string) => {
           path: '/products',
           icon: <BoxSeam size={18} />,
           roles: ['admin', 'manager'] // Only admin and manager
+        },
+        
+        {
+          name: 'Repair Jobs',
+          path: '/repair-jobs',
+          icon: <Gear size={18} />,
+          roles: ['admin', 'manager', 'cashier'] // All roles can manage repair jobs
         },
       ]
     },
@@ -228,7 +236,27 @@ const Layout = () => {
                   <BoxArrowRight size={20} />
               </Dropdown.Toggle>
               <Dropdown.Menu>
-                <Dropdown.Item onClick={handleLogout}>Logout</Dropdown.Item>
+                {user?.role === 'admin' && (
+                  <>
+                    <LinkContainer to="/admin/shop">
+                      <Dropdown.Item>
+                        <Gear size={16} className="me-2" />
+                        Shop Settings
+                      </Dropdown.Item>
+                    </LinkContainer>
+                    <LinkContainer to="/admin/users">
+                      <Dropdown.Item>
+                        <PeopleFill size={16} className="me-2" />
+                        User Management
+                      </Dropdown.Item>
+                    </LinkContainer>
+                    <Dropdown.Divider />
+                  </>
+                )}
+                <Dropdown.Item onClick={handleLogout}>
+                  <BoxArrowRight size={16} className="me-2" />
+                  Logout
+                </Dropdown.Item>
               </Dropdown.Menu>
             </Dropdown> 
           </div>

@@ -2,6 +2,8 @@ const mongoose = require('mongoose');
 const Sale = require('../models/Sale');
 const Product = require('../models/Product');
 const Customer = require('../models/Customer');
+const Repair = require('../models/Repair');
+const Service = require('../models/Service');
 
 // Generate invoice number
 const generateInvoiceNumber = async (shopId) => {
@@ -27,11 +29,17 @@ const generateInvoiceNumber = async (shopId) => {
 
 // Create a new sale
 exports.createSale = async (req, res) => {
+  console.log('=== CREATE SALE STARTED ===');
+  console.log('Request body:', JSON.stringify(req.body, null, 2));
+  
   const session = await mongoose.startSession();
   session.startTransaction();
   
   try {
-    const { items, customerName, customerPhone, ...saleData } = req.body;
+    const { items, services = [], customerName, customerPhone, ...saleData } = req.body;
+    
+    console.log('Extracted items:', JSON.stringify(items, null, 2));
+    console.log('Items length:', items ? items.length : 'undefined');
     
     // Generate invoice number if not provided
     if (!saleData.invoiceNumber) {
@@ -69,19 +77,82 @@ exports.createSale = async (req, res) => {
       }
     }
     
-    // Create the sale
+    // Debug: Log the incoming request data
+    console.log('Incoming sale request items:', JSON.stringify(items, null, 2));
+    
+    // Filter items to separate products, manual items, and services
+    const productItems = items.filter(item => !item.isService && !item.isManual && (item.product || item.productId));
+    const manualItems = items.filter(item => !item.isService && item.isManual);
+    const serviceItems = items.filter(item => item.isService);
+    
+    console.log('Filtered product items:', JSON.stringify(productItems, null, 2));
+    
+    // Process product items and fetch actual cost prices from database
+    const processedProductItems = [];
+    for (const item of productItems) {
+      const productId = item.product || item.productId;
+      
+      // Fetch the actual product to get the real cost price
+      const productDoc = await Product.findOne({
+        _id: productId,
+        shopId: req.user.shopId
+      });
+      
+      if (!productDoc) {
+        throw new Error(`Product not found: ${productId}`);
+      }
+      
+      // Debug: Log all cost price related data
+      console.log(`Processing item for product ${productDoc.name}:`);
+      console.log(`  - Frontend item.costPrice: ${item.costPrice}`);
+      console.log(`  - Database productDoc.cost: ${productDoc.cost}`);
+      console.log(`  - Item object:`, JSON.stringify(item, null, 2));
+      
+      // Use frontend cost price if available and valid, otherwise use database cost
+      const finalCostPrice = (item.costPrice && item.costPrice > 0) ? item.costPrice : (productDoc.cost || 0);
+      
+      processedProductItems.push({
+        ...item,
+        costPrice: finalCostPrice,
+        product: productId
+      });
+      
+      // Debug logging for cost price
+      console.log(`Product ${productDoc.name}: frontend_costPrice=${item.costPrice}, db_cost=${productDoc.cost}, final_costPrice=${finalCostPrice}`);
+    }
+    
+    // Process manual items (no costPrice needed for manual items)
+    const processedManualItems = manualItems.map(item => ({
+      ...item,
+      isManual: true,
+      costPrice: 0 // Manual items have no cost price
+    }));
+    
+    // Combine all processed items
+    const processedItems = [...processedProductItems, ...processedManualItems];
+
+    // Create the sale with processed items
     const newSale = new Sale({
       ...saleData,
       customer: customerId,
-      items,
+      items: processedItems,
       user: req.user.id,
-      shopId: req.user.shopId  // Add shop ID
+      shopId: req.user.shopId
     });
+    
+    // Debug logging for sale items with cost prices
+    console.log('Sale items with cost prices:', processedItems.map(item => ({
+      name: item.name || 'Product',
+      quantity: item.quantity,
+      price: item.price,
+      costPrice: item.costPrice,
+      isManual: item.isManual
+    })));
     
     await newSale.save({ session });
     
-    // Update inventory for each product
-    for (const item of items) {
+    // Update inventory for product items
+    for (const item of productItems) {
       const productId = item.product || item.productId;
       await Product.updateOne(
         { 
@@ -93,23 +164,92 @@ exports.createSale = async (req, res) => {
       );
     }
     
+    // Create separate service records for service items
+    const createdServices = [];
+    for (const serviceItem of serviceItems) {
+      const service = new Service({
+        name: serviceItem.name,
+        description: serviceItem.description || 'Manual service entry',
+        price: serviceItem.price,
+        costPrice: serviceItem.costPrice || 0, // Handle both costPrice and cost_price formats
+        quantity: serviceItem.quantity || 1,
+        total: serviceItem.total || (serviceItem.price * (serviceItem.quantity || 1)),
+        discount: serviceItem.discount || 0,
+        customerName: customerName,
+        customerPhone: customerPhone,
+        paymentMethod: saleData.paymentMethod || 'cash',
+        saleId: newSale._id,
+        invoiceNumber: `${saleData.invoiceNumber}-SRV`,
+        userId: req.user.id,
+        shopId: req.user.shopId,
+        status: 'completed'
+      });
+      
+      await service.save({ session });
+      createdServices.push(service);
+    }
+    
+    // Also create service records from the services array if provided
+    for (const serviceData of services) {
+      const service = new Service({
+        name: serviceData.name,
+        description: serviceData.description || 'Manual service entry',
+        price: serviceData.price,
+        costPrice: serviceData.costPrice || serviceData.cost_price || 0,
+        quantity: serviceData.quantity || 1,
+        total: serviceData.total || (serviceData.price * (serviceData.quantity || 1)),
+        discount: serviceData.discount || 0,
+        customerName: customerName,
+        customerPhone: customerPhone,
+        paymentMethod: saleData.paymentMethod || 'cash',
+        saleId: newSale._id,
+        invoiceNumber: `${saleData.invoiceNumber}-SRV`,
+        userId: req.user.id,
+        shopId: req.user.shopId,
+        status: 'completed'
+      });
+      
+      await service.save({ session });
+      createdServices.push(service);
+      
+      // If this service is linked to a repair job, update the repair job status to 'billed'
+      if (serviceData.repairJobId) {
+        const RepairJob = require('../models/RepairJob');
+        await RepairJob.findByIdAndUpdate(
+          serviceData.repairJobId,
+          { 
+            status: 'billed',
+            saleId: newSale._id
+          },
+          { session }
+        );
+      }
+    }
+    
     await session.commitTransaction();
     session.endSession();
     
-    // Return the sale with populated items
+    // Return the sale with populated items and created services
     const completeSale = await Sale.findOne({
       _id: newSale._id,
       shopId: req.user.shopId
     })
       .populate('customer', 'name email phone')
       .populate('user', 'name username')
-      .populate('items.product');
+      .populate('items.product')
+      .populate('items.repair');
       
-    res.status(201).json(completeSale);
+    res.status(201).json({
+      ...completeSale.toObject(),
+      services: createdServices
+    });
   } catch (err) {
     await session.abortTransaction();
     session.endSession();
-    console.error('Error creating sale:', err.message);
+    console.error('=== ERROR CREATING SALE ===');
+    console.error('Error message:', err.message);
+    console.error('Error stack:', err.stack);
+    console.error('Request body that caused error:', JSON.stringify(req.body, null, 2));
     res.status(500).json({ message: 'Server error creating sale', error: err.message });
   }
 };
@@ -171,6 +311,10 @@ exports.getSales = async (req, res) => {
     const sales = await Sale.find(filter)
       .populate('customer')
       .populate('user', 'name username')
+      .populate({
+        path: 'items.product',
+        select: 'name sku barcode'
+      })
       .sort(sortOptions)
       .skip((Number(page) - 1) * Number(limit))
       .limit(Number(limit));
@@ -191,6 +335,56 @@ exports.getSales = async (req, res) => {
       // Make sure sale date is correctly set
       if (!saleObj.date) {
         saleObj.date = saleObj.createdAt;
+      }
+      
+      // Ensure items array exists and has returnedQuantity - transform explicitly
+      if (saleObj.items && Array.isArray(saleObj.items)) {
+        // Debug: Log item data to verify returnedQuantity
+        if (saleObj.returnedAmount > 0) {
+          console.log(`Sale ${saleObj.invoiceNumber} items:`, saleObj.items.map(i => ({
+            id: i._id,
+            qty: i.quantity,
+            returned: i.returnedQuantity
+          })));
+        }
+        
+        // Add SaleItems for frontend compatibility with full product details
+        saleObj.SaleItems = saleObj.items.map(item => {
+          // Base item fields
+          const baseItem = {
+            id: item._id ? item._id.toString() : undefined,
+            _id: item._id ? item._id.toString() : undefined,
+            quantity: item.quantity || 0,
+            price: item.price || 0,
+            discount: item.discount || 0,
+            returnedQuantity: item.returnedQuantity || 0  // Explicitly get from database
+          };
+          
+          if (item.isManual) {
+            return {
+              ...baseItem,
+              isManual: true,
+              name: item.name || 'Manual Item'
+            };
+          } else {
+            return {
+              ...baseItem,
+              productId: item.product?._id ? item.product._id.toString() : undefined,
+              Product: item.product ? {
+                id: item.product._id ? item.product._id.toString() : undefined,
+                name: item.product.name || 'Unknown',
+                barcode: item.product.barcode || item.product.sku || ''
+              } : { name: 'Unknown' },
+              product: item.product ? {
+                _id: item.product._id ? item.product._id.toString() : undefined,
+                name: item.product.name || 'Unknown',
+                barcode: item.product.barcode || item.product.sku || ''
+              } : { name: 'Unknown' }
+            };
+          }
+        });
+      } else {
+        saleObj.SaleItems = [];
       }
       
       return saleObj;
@@ -264,6 +458,10 @@ exports.getSaleById = async (req, res) => {
         if (!item.subtotal) {
           item.subtotal = item.price * item.quantity;
         }
+        // Ensure returnedQuantity exists
+        if (item.returnedQuantity === undefined) {
+          item.returnedQuantity = 0;
+        }
         // Make sure product information is consistent
         if (item.product) {
           item.product.id = item._id;
@@ -277,22 +475,26 @@ exports.getSaleById = async (req, res) => {
         if (item.isManual) {
           return {
             id: item._id.toString(),
+            _id: item._id.toString(),
             isManual: true,
             name: item.name || 'Manual Item',
             quantity: item.quantity,
             price: item.price,
             discount: item.discount || 0,
-            subtotal: item.price * item.quantity
+            subtotal: item.price * item.quantity,
+            returnedQuantity: item.returnedQuantity || 0
           };
         } else {
           return {
             id: item._id.toString(),
+            _id: item._id.toString(),
             productId: item.product?._id.toString(),
             quantity: item.quantity,
             unitPrice: item.price,
             price: item.price,
             discount: item.discount || 0,
             subtotal: item.price * item.quantity,
+            returnedQuantity: item.returnedQuantity || 0,
             Product: {
               id: item.product?._id.toString(),
               name: item.product?.name || 'Unknown',
