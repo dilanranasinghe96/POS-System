@@ -740,76 +740,227 @@ const POS: React.FC = () => {
     setCheckoutDialogOpen(true);
   };
 
-  const directPrintReceipt = async (receiptToPrint: ReceiptData) => {
-    try {
-      setPrintingReceipt(true);
+// Replace the existing directPrintReceipt function in POS.tsx with the following implementation.
+// This mirrors the approach used in Sales.tsx (build HTML string with @page, write into iframe,
+// call contentWindow.print() on load and remove the iframe afterwards) to avoid the TypeScript
+// issue with invoking a possibly-undefined function and to match the Sales printing behavior.
 
-      const currentShop = user?.shopId ? { name: user.shopId.name } : null;
-      const shopName = currentShop?.name || "Bike Shop";
-      const shopPhone = user?.shopId?.phone || "";
-      const shopAddress = user?.shopId?.address || "";
+const directPrintReceipt = async (receiptToPrint: ReceiptData) => {
+  try {
+    setPrintingReceipt(true);
 
-  const printIframe = document.createElement('iframe');
-  printIframe.style.position = 'fixed';
-  printIframe.style.right = '0';
-  printIframe.style.bottom = '0';
-  printIframe.style.width = '0';
-  printIframe.style.height = '0';
-  printIframe.style.border = 'none';
-  printIframe.style.background = 'transparent';
-  printIframe.style.zIndex = '9999';
-  printIframe.setAttribute('id', 'receipt-print-preview');
-  document.body.appendChild(printIframe);
+    const currentShop = user?.shopId ? { name: user.shopId.name } : null;
+    const shopName = currentShop?.name || "Bike Shop";
+    const shopPhone = user?.shopId?.phone || "";
+    const shopAddress = user?.shopId?.address || "";
 
-      const safeItems = receiptToPrint.items.map(item => ({
-        name: item.name || 'Unnamed Item',
-        quantity: item.quantity || 1,
-        price: typeof item.price === 'number' ? item.price : 0,
-        total: typeof item.total === 'number' ? item.total : 0
-      }));
+    const printIframe = document.createElement('iframe');
+    printIframe.style.position = 'fixed';
+    printIframe.style.right = '0';
+    printIframe.style.bottom = '0';
+    printIframe.style.width = '0';
+    printIframe.style.height = '0';
+    printIframe.style.border = 'none';
+    printIframe.style.background = 'transparent';
+    printIframe.style.zIndex = '9999';
+    printIframe.setAttribute('id', 'receipt-print-preview');
+    document.body.appendChild(printIframe);
 
-      // Render ReceiptHtml to HTML string for printing
-      const receiptHtmlString = ReactDOMServer.renderToStaticMarkup(
-        <ReceiptHtml shopName={shopName} shopAddress={shopAddress} shopPhone={shopPhone} receiptData={receiptToPrint} />
-      );
-      const printCss = `<style>
-        @media print {
-          body { margin: 0; }
-        }
-        body { background: #fff; margin: 0; padding: 0; }
-      </style>`;
-      // Only print the receipt content, no extra title or date
-      const fullHtml = `<!DOCTYPE html><html><head>${printCss}</head><body>${receiptHtmlString}</body></html>`;
+    const safeItems = receiptToPrint.items.map(item => ({
+      name: item.name || 'Unnamed Item',
+      quantity: item.quantity || 1,
+      price: typeof item.price === 'number' ? item.price : 0,
+      total: typeof item.total === 'number' ? item.total : 0
+    }));
 
-      const iframeDoc = printIframe.contentDocument || printIframe.contentWindow?.document;
-      if (iframeDoc) {
-        iframeDoc.open();
-        iframeDoc.write(fullHtml);
-        iframeDoc.close();
+    // Build receipt HTML using the same structure / CSS used in Sales.tsx
+    // Use @page rules and body width/margins to match Sales printing layout.
+    const receiptHtml = `
+      <html>
+        <head>
+          <title></title>
+          <meta charset="utf-8"/>
+          <meta name="viewport" content="width=device-width,initial-scale=1"/>
+          <style>
+            @page {
+              size: 80mm auto;
+              margin: 0mm;
+            }
+            body {
+              font-family: 'Arial', sans-serif;
+              font-size: 12px;
+              width: 72mm;
+              margin: 4mm;
+              padding: 0;
+              -webkit-print-color-adjust: exact;
+              print-color-adjust: exact;
+              color: #000;
+              background: #fff;
+            }
+            .receipt { width: 100%; }
+            .text-center { text-align: center; }
+            hr { border: none; border-top: 1px dashed #000; margin: 5px 0; }
+            table { width: 100%; border-collapse: collapse; margin: 5px 0; }
+            th { font-weight: bold; text-align: left; font-size: 11px; }
+            .item-row td { font-size: 12px; padding: 2px 0; vertical-align: top; }
+            .item-name {
+              word-wrap: break-word;
+              word-break: break-word;
+              white-space: normal;
+              max-width: 35mm;
+              padding-right: 4px;
+            }
+            .summary-row {
+              display: flex;
+              justify-content: space-between;
+              margin: 2px 0;
+              font-size: 12px;
+            }
+            .total-row {
+              font-weight: bold;
+              font-size: 14px;
+              margin-top: 5px;
+            }
+            .paper-cut-space {
+              height: 10mm; /* reduced from 20mm to avoid extra blank page */
+            }
 
-        // Immediately trigger print, no preview
+            /* Avoid page breaks inside the receipt content where possible */
+            .receipt, .receipt * {
+              box-sizing: border-box;
+              page-break-inside: avoid;
+              -webkit-column-break-inside: avoid;
+            }
+          </style>
+
+          <script>
+            window.addEventListener('afterprint', function() {
+              try {
+                window.parent.postMessage('printComplete', '*');
+              } catch (e) {
+                // ignore
+              }
+            });
+          </script>
+        </head>
+        <body>
+          <div class="receipt">
+            <div class="text-center">
+              <h2 style="margin: 0px 0 4px 0; font-size: 18px;">${shopName}</h2>
+              ${shopAddress ? `<p style="margin: 0px 0 4px 0; font-size: 12px;">${shopAddress}</p>` : ''}
+              <h3 style="margin: 0px 0 4px 0; font-size: 16px;">RECEIPT</h3>
+              <p style="margin: 3px 0; font-size: 11px;">${receiptToPrint.date}</p>
+              <p style="margin: 3px 0; font-size: 11px;">Invoice: ${receiptToPrint.invoiceNumber}</p>
+            </div>
+
+            <hr />
+
+            <div>
+              <p style="margin: 2px 0; font-size: 11px;">Customer: ${receiptToPrint.customer}</p>
+              <p style="margin: 2px 0; font-size: 11px;">Cashier: ${receiptToPrint.cashier}</p>
+            </div>
+
+            <hr />
+
+            <table>
+              <thead>
+                <tr>
+                  <th style="width: 40%;">Item</th>
+                  <th style="width: 15%; text-align: center;">Qty</th>
+                  <th style="width: 20%; text-align: right;">Price</th>
+                  <th style="width: 25%; text-align: right;">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${safeItems.map(item => `
+                  <tr class="item-row">
+                    <td class="item-name">${item.name}</td>
+                    <td style="text-align:center;">${item.quantity}</td>
+                    <td style="text-align:right;">${item.price.toFixed(2)}</td>
+                    <td style="text-align:right;">${item.total.toFixed(2)}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+
+            <hr />
+
+            <div>
+              ${receiptToPrint.subtotal > 0 ? `<div class="summary-row"><span>Products Subtotal:</span><span>Rs. ${receiptToPrint.subtotal.toFixed(2)}</span></div>` : ''}
+              ${receiptToPrint.servicesSubtotal > 0 ? `<div class="summary-row"><span>Services Subtotal:</span><span>Rs. ${receiptToPrint.servicesSubtotal.toFixed(2)}</span></div>` : ''}
+              ${receiptToPrint.discount > 0 ? `<div class="summary-row"><span>Discount:</span><span>-Rs. ${receiptToPrint.discount.toFixed(2)}</span></div>` : ''}
+              ${receiptToPrint.tax > 0 ? `<div class="summary-row"><span>Tax:</span><span>Rs. ${receiptToPrint.tax.toFixed(2)}</span></div>` : ''}
+              <div class="total-row"><span>Total:</span><span>Rs. ${receiptToPrint.total.toFixed(2)}</span></div>
+              <div class="summary-row"><span>Payment Method:</span><span>${receiptToPrint.paymentMethod.replace('_',' ').toUpperCase()}</span></div>
+            </div>
+
+            <hr />
+
+            <div class="text-center">
+              <p style="margin: 2px 0;">Thank you for your purchase!</p>
+              <p style="margin: 2px 0;">Please visit again</p>
+              ${shopPhone ? `<p style="margin: 4px 0; font-size: 11px;">Contact us: ${shopPhone}</p>` : ''}
+            </div>
+
+            <div class="paper-cut-space"></div>
+          </div>
+        </body>
+      </html>
+    `;
+
+    const iframeDoc = printIframe.contentDocument || printIframe.contentWindow?.document;
+    if (iframeDoc) {
+      // Parent listens for iframe's afterprint postMessage (string 'printComplete') to cleanup
+      const onMessage = (ev: MessageEvent) => {
+        try {
+          if (ev.data === 'printComplete') {
+            window.removeEventListener('message', onMessage);
+            if (printIframe && document.body.contains(printIframe)) {
+              document.body.removeChild(printIframe);
+            }
+            setPrintingReceipt(false);
+          }
+        } catch (e) { /* ignore */ }
+      };
+      window.addEventListener('message', onMessage);
+
+      iframeDoc.open();
+      iframeDoc.write(receiptHtml);
+      iframeDoc.close();
+
+      // When iframe loads, call print on its window (same approach as Sales.tsx)
+      const onIframeLoad = () => {
+        try {
+          printIframe.removeEventListener('load', onIframeLoad);
+        } catch (_) {}
         try {
           printIframe.contentWindow?.focus();
           printIframe.contentWindow?.print();
+          // Fallback cleanup in case afterprint/postMessage does not arrive
           setTimeout(() => {
-            if (document.body.contains(printIframe)) {
-              document.body.removeChild(printIframe);
-              setPrintingReceipt(false);
-            }
-          }, 2000);
+            try {
+              if (document.body.contains(printIframe)) {
+                document.body.removeChild(printIframe);
+              }
+            } catch (e) { /* ignore */ }
+            setPrintingReceipt(false);
+          }, 1500);
         } catch (err) {
           console.error('Error during iframe print:', err);
-          document.body.removeChild(printIframe);
+          try { document.body.removeChild(printIframe); } catch (e) {}
           setPrintingReceipt(false);
         }
-      } else {
-        throw new Error('Could not access iframe document');
-      }
-    } catch (error) {
-      console.error('Error printing receipt:', error);
-      setPrintingReceipt(false);
+      };
+
+      printIframe.addEventListener('load', onIframeLoad);
+    } else {
+      throw new Error('Could not access iframe document');
     }
-  };
+  } catch (err) {
+    console.error('Error printing receipt:', err);
+    setPrintingReceipt(false);
+  }
+};
 
   const processSale = async () => {
     try {
