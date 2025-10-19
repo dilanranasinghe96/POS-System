@@ -529,7 +529,6 @@ const POS: React.FC = () => {
       setScanningMessage(null);
       setScanningProduct(null);
 
-      console.log("QR scan received:", qrData);
 
       if (!qrData) {
         setScanningMessage('Invalid QR data: Empty or null data received');
@@ -541,12 +540,10 @@ const POS: React.FC = () => {
 
       if (qrData.barcode) {
         identifierType = 'barcode';
-        console.log("Trying to fetch by barcode:", qrData.barcode);
         try {
           const response = await productsApi.getByBarcode(qrData.barcode);
           if (response.data) {
             product = response.data;
-            console.log("Product found by barcode:", product);
           }
         } catch (error) {
           console.warn("Barcode lookup failed:", error);
@@ -555,12 +552,10 @@ const POS: React.FC = () => {
 
       if (!product && qrData.id) {
         identifierType = 'id';
-        console.log("Trying to fetch by ID:", qrData.id);
         try {
           const response = await productsApi.getById(qrData.id);
           if (response.data) {
             product = response.data;
-            console.log("Product found by ID:", product);
           }
         } catch (error) {
           console.warn("ID lookup failed:", error);
@@ -569,12 +564,10 @@ const POS: React.FC = () => {
 
       if (!product && qrData.name) {
         identifierType = 'name';
-        console.log("Trying to search by name:", qrData.name);
         try {
           const response = await productsApi.getAll({ search: qrData.name });
           if (response.data && response.data.products && response.data.products.length > 0) {
             product = response.data.products[0];
-            console.log("Product found by name search:", product);
           }
         } catch (error) {
           console.warn("Name search failed:", error);
@@ -824,12 +817,7 @@ const POS: React.FC = () => {
 
       const saleItems = cartItems.map(item => {
         if (item.product) {
-          // Debug logging
-          console.log('Processing product for sale:', {
-            name: item.product.name,
-            costPrice: item.product.costPrice,
-            price: item.product.price
-          });
+          
           
           return {
             productId: item.product.id,

@@ -337,7 +337,6 @@ const Products: React.FC = () => {
         return;
       }
 
-      console.log('Sending request to preview barcodes for products:', selectedProductIds);
 
       const response = await printApi.generateBarcodes(selectedProductIds, printQuantity);
 
@@ -388,7 +387,6 @@ const Products: React.FC = () => {
         return;
       }
 
-      console.log('Sending request to generate barcodes for products:', selectedProductIds);
 
       const response = await printApi.generateBarcodes(selectedProductIds, printQuantity);
 
@@ -692,10 +690,8 @@ const Products: React.FC = () => {
           let existingProducts: any[] = [];
 
           try {
-            console.log('Checking existing products via API for:', importProductNames.slice(0, 5), '...');
             const response = await productsApi.checkExistingProducts(importProductNames);
             existingProducts = response.data || [];
-            console.log('API returned existing products:', existingProducts.length);
           } catch (apiError) {
             console.error('API error when checking existing products:', apiError);
 
@@ -722,7 +718,6 @@ const Products: React.FC = () => {
               })
               .filter(Boolean);
 
-            console.log('Found existing products from current data:', existingProducts.length);
           }
 
           const updateMap: Record<string, { id: number, existing: boolean, currentStock: number }> = {};
@@ -803,11 +798,9 @@ const Products: React.FC = () => {
           });
 
           if (product._action === 'UPDATE' && product._id) {
-            console.log(`Updating existing product: ${product.name} (ID: ${product._id})`);
             await productsApi.update(product._id, formDataToSend);
             updateCount++;
           } else {
-            console.log(`Creating new product: ${product.name}`);
             await productsApi.create(formDataToSend);
             successCount++;
           }

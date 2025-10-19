@@ -157,7 +157,6 @@ const Reports = () => {
       });
       
       // Log the data for debugging
-      console.log('Sales summary data:', response.data);
       
       setSalesSummary(response.data);
       
@@ -190,7 +189,6 @@ const Reports = () => {
         shopId: currentShop._id
       });
       
-      console.log('Profit distribution data:', response.data);
       
       setProfitDistribution(response.data);
       
@@ -256,11 +254,7 @@ const Reports = () => {
         return;
       }
 
-      console.log('Fetching inventory data with params:', {
-        lowStock: showLowStock,
-        categoryId: categoryFilter, // Add categoryId to the params
-        shopId: currentShop._id
-      });
+    
       
       const response = await reportsApi.getInventoryStatusReport({
         lowStock: showLowStock,
@@ -268,7 +262,6 @@ const Reports = () => {
         shopId: currentShop._id
       });
       
-      console.log('Inventory data received:', response.data);
       
       // Improved handling of response data format
       if (!response.data) {

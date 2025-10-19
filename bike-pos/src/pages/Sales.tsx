@@ -299,7 +299,6 @@ const Sales: React.FC = () => {
               reason: returnReason
             };
             
-            console.log('Returning item:', returnData);
             
             await salesApi.returnSingleItem(returnData);
             successCount++;
@@ -771,7 +770,6 @@ const Sales: React.FC = () => {
                     <tr 
                       key={sale.id} 
                       onClick={() => {
-                        console.log('Row clicked with sale ID:', sale.id);
                         if (sale && sale.id) {
                           handleOpenDetailDialog(String(sale.id));
                         } else {

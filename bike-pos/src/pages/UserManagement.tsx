@@ -144,14 +144,7 @@ const UserManagement: React.FC = () => {
     }
 
     try {
-      console.log('Attempting to delete user:', {
-        userId,
-        targetUser: targetUser.name,
-        targetRole: targetUser.role,
-        currentUser: user?.name,
-        currentRole: user?.role,
-        canDelete: canDeleteUser(targetUser)
-      });
+     
 
       await usersApi.delete(userId);
       showSuccess('User deleted successfully');
