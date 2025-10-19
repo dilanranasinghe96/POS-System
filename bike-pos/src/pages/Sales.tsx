@@ -1,3 +1,5 @@
+
+
 import React, { useEffect, useState } from 'react';
 import {
     Badge,
@@ -330,6 +332,30 @@ const Sales: React.FC = () => {
     }
   };
 
+  // Helper: compute effective total for an item using available fields
+  const computeItemTotal = (item: SaleItem): number => {
+    const unitPrice = (typeof item.price === 'number' && !isNaN(item.price))
+      ? item.price
+      : (typeof item.unitPrice === 'number' && !isNaN(item.unitPrice) ? item.unitPrice : 0);
+    const qty = (typeof item.quantity === 'number' && !isNaN(item.quantity)) ? item.quantity : 0;
+    const subtotal = (typeof item.subtotal === 'number' && !isNaN(item.subtotal))
+      ? item.subtotal
+      : unitPrice * qty;
+    const discount = (typeof item.discount === 'number' && !isNaN(item.discount)) ? item.discount : 0;
+    const total = (typeof item.total === 'number' && !isNaN(item.total))
+      ? item.total
+      : (subtotal - discount);
+    return total;
+  };
+
+  // Helper: compute services subtotal for a Sale
+  const computeServicesSubtotal = (sale: Sale): number => {
+    if (!sale.SaleItems || sale.SaleItems.length === 0) return 0;
+    return sale.SaleItems
+      .filter(i => !!i.isService)
+      .reduce((s, it) => s + computeItemTotal(it), 0);
+  };
+
   const directPrintReceipt = async (sale: Sale) => {
     try {
       setPrintingReceipt(true);
@@ -362,12 +388,15 @@ const Sales: React.FC = () => {
           quantity: item.quantity,
           price: unitPrice,
           discount: itemDiscount,
-          total: subtotal - itemDiscount
+          total: (typeof item.total === 'number' ? item.total : (subtotal - itemDiscount))
         };
       }) || [];
 
-      const totalItemDiscounts = receiptItems.reduce((sum, item) => sum + item.discount, 0);
-      const totalDiscount = totalItemDiscounts + sale.discount;
+      const totalItemDiscounts = receiptItems.reduce((sum, item) => sum + (item.discount || 0), 0);
+      const totalDiscount = totalItemDiscounts + (sale.discount || 0);
+
+      // Use robust services subtotal computation
+      const servicesSubtotal = computeServicesSubtotal(sale);
 
       const receiptHtml = `
         <html>
@@ -440,7 +469,7 @@ const Sales: React.FC = () => {
                 margin-top: 10px;
               }
               .paper-cut-space {
-                height: 20mm;
+                height: 10mm;
               }
             </style>
             <script>
@@ -492,10 +521,10 @@ const Sales: React.FC = () => {
                   <span>Products Subtotal:</span>
                   <span>Rs. ${sale.subtotal.toFixed(2)}</span>
                 </div>
-                ${sale.SaleItems && sale.SaleItems.some(item => item.isService) ? `
+                ${servicesSubtotal > 0 ? `
                   <div class="summary-row">
                     <span>Services Subtotal:</span>
-                    <span>Rs. ${sale.SaleItems.filter(item => item.isService).reduce((sum, item) => sum + (item.total || 0), 0).toFixed(2)}</span>
+                    <span>Rs. ${servicesSubtotal.toFixed(2)}</span>
                   </div>
                 ` : ''}
                 ${totalDiscount > 0 ? `
@@ -1067,7 +1096,7 @@ const Sales: React.FC = () => {
                   {selectedSale.SaleItems && selectedSale.SaleItems.some(item => item.isService) && (
                     <div className="d-flex justify-content-between">
                       <strong>Services Subtotal:</strong>
-                      <span>Rs. {selectedSale.SaleItems.filter(item => item.isService).reduce((sum, item) => sum + (item.total || 0), 0).toFixed(2)}</span>
+                      <span>Rs. {computeServicesSubtotal(selectedSale).toFixed(2)}</span>
                     </div>
                   )}
                   <div className="d-flex justify-content-between">
@@ -1204,7 +1233,7 @@ const Sales: React.FC = () => {
                               parseInt(e.target.value) || 0,
                               availableToReturn
                             )}
-                            className={currentReturnQty > 0 ? 'border-warning' : ''}
+                            className={currentReturnQty > availableToReturn ? 'border-danger' : (currentReturnQty > 0 ? 'border-warning' : '')}
                             placeholder={`Max: ${availableToReturn}`}
                           />
                           {currentReturnQty > availableToReturn && (
