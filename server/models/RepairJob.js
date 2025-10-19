@@ -3,8 +3,8 @@ const mongoose = require('mongoose');
 const repairJobSchema = new mongoose.Schema({
   jobNumber: {
     type: String,
-    required: true,
     unique: true
+    // Not required - will be auto-generated in pre-save hook
   },
   customer: {
     name: {
@@ -20,12 +20,30 @@ const repairJobSchema = new mongoose.Schema({
     }
   },
   item: {
-    brand: String,
-    model: String,
-    year: String,
-    color: String,
-    serialNumber: String,
-    type: String // e.g., 'bike', 'motorcycle', 'electronics', etc.
+    brand: {
+      type: String,
+      default: ''
+    },
+    model: {
+      type: String,
+      default: ''
+    },
+    year: {
+      type: String,
+      default: ''
+    },
+    color: {
+      type: String,
+      default: ''
+    },
+    serialNumber: {
+      type: String,
+      default: ''
+    },
+    type: {
+      type: String,
+      default: '' // e.g., 'bike', 'motorcycle', 'electronics', etc.
+    }
   },
   jobType: {
     type: String,
@@ -164,26 +182,62 @@ const repairJobSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Generate job number before saving
+// Generate job number before saving (unified with Sale invoice numbers)
 repairJobSchema.pre('save', async function(next) {
   if (this.isNew && !this.jobNumber) {
     try {
+      const Shop = mongoose.model('Shop');
+      const Sale = mongoose.model('Sale');
+      const shop = await Shop.findById(this.shop);
+      
+      // Generate prefix from shop name (first 3 letters, uppercase) + shop ID
+      // Same format as Sale invoices for unified numbering
+      let shopNamePrefix = 'INV'; // Default shop prefix
+      if (shop && shop.name) {
+        // Remove spaces and special characters, take first 3 letters
+        const cleanName = shop.name.replace(/[^a-zA-Z]/g, '').toUpperCase();
+        shopNamePrefix = cleanName.substring(0, 3) || 'INV';
+      }
+      
+      // Add last 2 characters of shop ID to ensure uniqueness across shops
+      const shopIdSuffix = this.shop.toString().slice(-2).toUpperCase();
+      const prefix = `${shopNamePrefix}${shopIdSuffix}`; // Same as Sale: e.g., BIS9A
+      
       const today = new Date();
       const dateStr = today.toISOString().slice(0, 10).replace(/-/g, '');
-      const prefix = this.jobType === 'quick_service' ? 'QS' : 'RJ';
       
-      // Get the last job number for today, this shop, and this job type
-      const lastJob = await this.constructor.findOne({
-        jobNumber: new RegExp(`^${prefix}-${dateStr}-`),
-        shop: this.shop,
-        jobType: this.jobType
-      }).sort({ createdAt: -1 });
+      // Get the last invoice number from BOTH Sales and RepairJobs for unified sequence
+      const [lastSale, lastJob] = await Promise.all([
+        Sale.findOne({
+          invoiceNumber: new RegExp(`^${prefix}-${dateStr}-`),
+          shopId: this.shop
+        }).sort({ createdAt: -1 }),
+        this.constructor.findOne({
+          jobNumber: new RegExp(`^${prefix}-${dateStr}-`),
+          shop: this.shop
+        }).sort({ createdAt: -1 })
+      ]);
       
+      // Get the highest number from both collections
       let nextNumber = 1;
+      
+      if (lastSale && lastSale.invoiceNumber) {
+        const parts = lastSale.invoiceNumber.split('-');
+        if (parts.length >= 3) {
+          const saleNumber = parseInt(parts[2]);
+          if (saleNumber >= nextNumber) {
+            nextNumber = saleNumber + 1;
+          }
+        }
+      }
+      
       if (lastJob && lastJob.jobNumber) {
         const parts = lastJob.jobNumber.split('-');
         if (parts.length >= 3) {
-          nextNumber = parseInt(parts[2]) + 1;
+          const jobNumber = parseInt(parts[2]);
+          if (jobNumber >= nextNumber) {
+            nextNumber = jobNumber + 1;
+          }
         }
       }
       

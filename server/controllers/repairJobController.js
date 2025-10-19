@@ -111,15 +111,30 @@ const getRepairJobById = async (req, res) => {
 // Create new repair job
 const createRepairJob = async (req, res) => {
   try {
+    // Debug log for quick services
+    if (req.body.jobType === 'quick_service') {
+      console.log('Creating quick service:', {
+        jobType: req.body.jobType,
+        status: req.body.status,
+        totalCost: req.body.totalCost,
+        services: req.body.services
+      });
+    }
+    
     const {
       customer,
       bike,
+      item,
       description,
       priority,
       estimatedCost,
       estimatedCompletionDate,
       deposit,
-      assignedTo
+      assignedTo,
+      jobType,
+      status,
+      totalCost,
+      services
     } = req.body;
 
 
@@ -135,35 +150,53 @@ const createRepairJob = async (req, res) => {
     }
 
 
-    // Generate job number manually
-    const jobCount = await RepairJob.countDocuments({ shop });
-    const jobNumber = `RJ${String(jobCount + 1).padStart(6, '0')}`;
-
+    // Don't generate jobNumber here - let the pre-save hook handle it
     const repairJob = new RepairJob({
-      jobNumber,
       customer,
-      bike,
+      bike: bike || undefined,
+      item: item || undefined,
       description,
+      jobType: jobType || 'repair_job',
+      status: status || 'pending',
       priority: priority || 'medium',
       estimatedCost: estimatedCost || 0,
+      totalCost: totalCost || 0,
       estimatedCompletionDate: estimatedCompletionDate ? new Date(estimatedCompletionDate) : null,
       deposit: deposit || 0,
       assignedTo: assignedTo || null,
+      services: services || [],
       createdBy: req.user.id,
       shop
     });
 
     await repairJob.save();
     
+    // Debug log after save
+    if (repairJob.jobType === 'quick_service') {
+      console.log('Quick service saved:', {
+        jobNumber: repairJob.jobNumber,
+        jobType: repairJob.jobType,
+        status: repairJob.status,
+        totalCost: repairJob.totalCost,
+        servicesCount: repairJob.services?.length
+      });
+    }
+    
     // Populate the created job for response
     await repairJob.populate('createdBy', 'name username');
     await repairJob.populate('assignedTo', 'name username');
 
-    res.status(201).json({
+    // Return the repair job data in the response
+    const response = {
       success: true,
       message: 'Repair job created successfully',
-      repairJob
-    });
+      data: repairJob.toObject()
+    };
+    
+    // Add legacy field for compatibility
+    response.repairJob = response.data;
+    
+    res.status(201).json(response);
   } catch (error) {
     console.error('Error creating repair job:', error);
     res.status(500).json({

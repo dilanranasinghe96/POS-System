@@ -684,7 +684,6 @@ const POS: React.FC = () => {
       };
 
       setCartItems(prev => [...prev, newService]);
-      showSuccess(`Quick service "${serviceName}" added to cart and job created`);
     } catch (error) {
       console.error('Error creating quick service:', error);
       showError('Failed to create quick service job');
